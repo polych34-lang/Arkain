@@ -106,8 +106,11 @@ Adapters raise `MarketplaceError{retryable}` so retry/backoff policy lives in on
 place. The raw marketplace payload is retained on each normalized order for
 audit when a number looks wrong.
 
-`NaverSmartstoreAdapter` is currently a typed **stub**; real auth + paging land
-in **ENG-Naver-Spike**.
+`NaverSmartstoreAdapter` is now a **real implementation** (ARK-3): bcrypt-signed
+OAuth2 auth, order + product pull, cursor pagination, shared retry. The contract
+gained `NormalizedProduct` + an optional `fetchProducts`. Live verification is
+gated on Naver credentials (CEO sign-off) — see
+`docs/naver-commerce-integration.md`.
 
 ## 6. Correctness conventions (non-negotiable)
 
@@ -164,8 +167,8 @@ the roadmap below — deliberately, to keep the MVP path short.
 ## 10. Roadmap (gated MVP path)
 
 1. **ARK-2 ENG-Foundation** — this doc + booting skeleton + CI/secrets. ✅
-2. **ENG-Naver-Spike** — real 네이버 커머스 API auth + pull orders/products into a
-   scratch store.
+2. **ENG-Naver-Spike (ARK-3)** — real 네이버 커머스 API auth + order/product pull.
+   ✅ adapter implemented + mock-tested; live run blocked on creds (CEO).
 3. **ENG-Domain-Model** — unified product/order/settlement schema.
 4. **ENG-Orders-MVP** — unified order dashboard pulling live Naver orders.
 5. **ENG-Products-MVP**, 6. **ENG-Settlement-MVP** — after the order loop is proven.
