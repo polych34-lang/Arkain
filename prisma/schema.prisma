@@ -1,0 +1,61 @@
+// ARKAIN database schema (PostgreSQL via Prisma).
+//
+// FOUNDATION ONLY. This is the seed of the unified domain model; the full
+// product/order/settlement normalization is owned by ENG-Domain-Model. What is
+// here defines the durable spine: sellers, their (encrypted) marketplace
+// connections, and a sync-run audit trail for correctness/debugging.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Marketplace {
+  naver_smartstore
+  coupang
+  eleven_st
+}
+
+model Seller {
+  id          String                 @id @default(uuid())
+  displayName String
+  createdAt   DateTime               @default(now())
+  connections MarketplaceConnection[]
+}
+
+/// A seller's link to one marketplace. The credential is stored ENCRYPTED
+/// (AES-256-GCM envelope) — see src/secrets/credentialStore.ts. Plaintext
+/// tokens never touch this table.
+model MarketplaceConnection {
+  id          String      @id @default(uuid())
+  seller      Seller      @relation(fields: [sellerId], references: [id])
+  sellerId    String
+  marketplace Marketplace
+  /// base64(iv).base64(authTag).base64(ciphertext)
+  ciphertext  String
+  keyVersion  Int         @default(1)
+  status      String      @default("active")
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  syncRuns    SyncRun[]
+
+  @@unique([sellerId, marketplace])
+}
+
+/// Audit trail for every order-sync attempt. Critical for trust: when a number
+/// looks wrong we can trace exactly which run produced it.
+model SyncRun {
+  id           String                @id @default(uuid())
+  connection   MarketplaceConnection @relation(fields: [connectionId], references: [id])
+  connectionId String
+  startedAt    DateTime              @default(now())
+  finishedAt   DateTime?
+  status       String                @default("running") // running | success | failed
+  ordersPulled Int                   @default(0)
+  cursor       String?
+  error        String?
+}

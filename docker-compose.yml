@@ -1,0 +1,22 @@
+# Local dev dependencies. App itself runs on the host (`npm run dev`).
+# `docker compose up -d` brings up Postgres for local development.
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: arkain-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: arkain
+    ports:
+      - "5432:5432"
+    volumes:
+      - arkain-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  arkain-pg:

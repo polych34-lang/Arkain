@@ -1,0 +1,30 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Secrets & local env — NEVER commit real credentials
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+secrets/
+
+# Logs
+*.log
+logs/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Prisma local
+prisma/*.db
+
+# Tooling scratch
+_oapi.json
+coverage/
