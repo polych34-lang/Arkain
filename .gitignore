@@ -28,3 +28,6 @@ prisma/*.db
 # Tooling scratch
 _oapi.json
 coverage/
+
+# Pulled marketplace data (may contain live seller order/PII data — never commit)
+data/

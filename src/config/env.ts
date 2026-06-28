@@ -31,6 +31,13 @@ const EnvSchema = z.object({
     .string()
     .url()
     .default("https://api.commerce.naver.com"),
+
+  // Naver spike (ARK-3) scratch-store knobs. Optional.
+  // For a SELLER-type (solution-provider) connection, the test seller's account
+  // id; omit for a SELF-type app where the client id/secret are the store's own.
+  NAVER_TEST_ACCOUNT_ID: z.string().optional(),
+  // How many days back the pull CLI looks for changed orders. Default 14.
+  NAVER_PULL_SINCE_DAYS: z.coerce.number().int().positive().default(14),
 });
 
 export type AppConfig = z.infer<typeof EnvSchema>;
@@ -66,5 +73,7 @@ export function redactedConfig(cfg: AppConfig): Record<string, unknown> {
     NAVER_COMMERCE_CLIENT_ID: mask(cfg.NAVER_COMMERCE_CLIENT_ID),
     NAVER_COMMERCE_CLIENT_SECRET: mask(cfg.NAVER_COMMERCE_CLIENT_SECRET),
     NAVER_COMMERCE_BASE_URL: cfg.NAVER_COMMERCE_BASE_URL,
+    NAVER_TEST_ACCOUNT_ID: mask(cfg.NAVER_TEST_ACCOUNT_ID),
+    NAVER_PULL_SINCE_DAYS: cfg.NAVER_PULL_SINCE_DAYS,
   };
 }

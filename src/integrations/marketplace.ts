@@ -54,6 +54,38 @@ export interface FetchOrdersPage {
   nextCursor?: string;
 }
 
+/** A normalized product/listing, marketplace-agnostic. Money in minor units (KRW won). */
+export interface NormalizedProduct {
+  marketplace: MarketplaceId;
+  /** The marketplace's listing id (the channel-level product the seller manages). */
+  marketplaceProductId: string;
+  /** The marketplace's catalog/origin id when distinct from the listing id. */
+  originProductId: string | null;
+  name: string;
+  /** Current sale price in integer KRW. */
+  salePriceKrw: number;
+  stockQuantity: number;
+  /** Raw marketplace status string, mapped to a unified status by the domain model. */
+  status: string;
+  /** Untouched marketplace payload, kept for audit/debugging correctness issues. */
+  raw: unknown;
+}
+
+export interface FetchProductsParams {
+  /** 1-based page index. Adapters that page by cursor ignore this and use `cursor`. */
+  page?: number;
+  /** Page size hint; adapters clamp to their own maximum. */
+  pageSize?: number;
+  /** Optional cursor for resuming pagination across sync runs. */
+  cursor?: string;
+}
+
+export interface FetchProductsPage {
+  products: NormalizedProduct[];
+  /** Present when more pages remain. Pass back as `cursor` to continue. */
+  nextCursor?: string;
+}
+
 export interface MarketplaceAdapter {
   readonly id: MarketplaceId;
 
@@ -65,6 +97,16 @@ export interface MarketplaceAdapter {
     cred: SellerCredential,
     params: FetchOrdersParams,
   ): Promise<FetchOrdersPage>;
+
+  /**
+   * Pull a page of normalized products. Optional: not every marketplace exposes a
+   * catalog API, and the order-sync MVP is gated only on `fetchOrders`. Adapters
+   * that support it page the same way (cursor in → page + nextCursor out).
+   */
+  fetchProducts?(
+    cred: SellerCredential,
+    params: FetchProductsParams,
+  ): Promise<FetchProductsPage>;
 }
 
 /** Raised by adapters so the sync engine can apply uniform retry/backoff policy. */
@@ -76,6 +118,10 @@ export class MarketplaceError extends Error {
       /** True when the caller should back off and retry (429 / 5xx / network). */
       retryable: boolean;
       status?: number;
+      /** Server-provided backoff hint (from a Retry-After header), in ms. */
+      retryAfterMs?: number;
+      /** Marketplace error code from the response body (e.g. Naver "GW.RATELIMIT"). */
+      code?: string;
       cause?: unknown;
     },
   ) {
