@@ -5,8 +5,12 @@
 
 This is the foundational architecture decision for ARKAIN. It records the stack
 choice, the trade-offs considered, and the conventions the next hire inherits.
-Subsequent ADRs append to `docs/adr/` (to be created with the first change that
-warrants one).
+Subsequent ADRs append to `docs/adr/`.
+
+- **ADR-0002** (`docs/adr/0002-multi-tenancy-b2b-b2c.md`, ARK-13): multi-tenant
+  data isolation (`tenant_id` + PostgreSQL RLS, reusing `Seller` as the tenant
+  boundary) and B2B/B2C order-level separation. Design only; ARK-10 implements
+  the migration.
 
 ---
 
@@ -179,6 +183,10 @@ the roadmap below — deliberately, to keep the MVP path short.
    live Naver data still gated on ARK-3's credential blocker. See
    `docs/order-sync-mvp.md`.
 5. **ENG-Products-MVP**, 6. **ENG-Settlement-MVP** — after the order loop is proven.
+6. **Multi-tenancy + B2B/B2C design (ARK-13)** — ✅ design complete, see
+   ADR-0002 above. Domain model currently has **no tenant scoping at all**
+   (flagged as a correctness gap, not just isolation, in ADR-0002 §1); ARK-10
+   implements the `tenant_id`/RLS migration this design specifies.
 
 ## 11. One-way vs two-way doors
 
