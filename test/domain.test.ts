@@ -79,12 +79,17 @@ describe("status mapping", () => {
 
 describe("order mapping", () => {
   it("maps scalar fields, preserving rawStatus and integer KRW money", () => {
-    const fields = toOrderScalarFields(order());
+    const fields = toOrderScalarFields(order(), "tenant-a");
     expect(fields.status).toBe("PAID");
     expect(fields.rawStatus).toBe("PAYED");
     expect(fields.totalAmountKrw).toBe(4000);
     expect(Number.isInteger(fields.totalAmountKrw)).toBe(true);
     expect(fields.orderedAt).toEqual(new Date("2026-06-20T01:00:00.000Z"));
+  });
+
+  it("connects the order to its tenant (ARK-10)", () => {
+    const fields = toOrderScalarFields(order(), "tenant-a");
+    expect(fields.tenant).toEqual({ connect: { id: "tenant-a" } });
   });
 
   it("maps every line item for nested create", () => {
@@ -106,7 +111,7 @@ describe("order mapping", () => {
   });
 
   it("nests items under create for the upsert-create input", () => {
-    const input = toOrderUpsertInput(order());
+    const input = toOrderUpsertInput(order(), "tenant-a");
     expect(input.items).toEqual({
       create: [
         {
@@ -120,7 +125,7 @@ describe("order mapping", () => {
   });
 
   it("maps an UNKNOWN-status order to UNKNOWN without dropping the raw value", () => {
-    const fields = toOrderScalarFields(order({ status: "SOME_NEW_STATUS" }));
+    const fields = toOrderScalarFields(order({ status: "SOME_NEW_STATUS" }), "tenant-a");
     expect(fields.status).toBe("UNKNOWN");
     expect(fields.rawStatus).toBe("SOME_NEW_STATUS");
   });
@@ -128,15 +133,20 @@ describe("order mapping", () => {
 
 describe("product mapping", () => {
   it("maps a product, mapping status and preserving raw", () => {
-    const input = toProductUpsertInput(product());
+    const input = toProductUpsertInput(product(), "tenant-a");
     expect(input.status).toBe("ON_SALE");
     expect(input.rawStatus).toBe("SALE");
     expect(input.salePriceKrw).toBe(2000);
     expect(input.raw).toEqual({ source: "test" });
   });
 
+  it("connects the product to its tenant (ARK-10)", () => {
+    const input = toProductUpsertInput(product(), "tenant-a");
+    expect(input.tenant).toEqual({ connect: { id: "tenant-a" } });
+  });
+
   it("passes through a null originProductId", () => {
-    const input = toProductUpsertInput(product({ originProductId: null }));
+    const input = toProductUpsertInput(product({ originProductId: null }), "tenant-a");
     expect(input.originProductId).toBeNull();
   });
 });

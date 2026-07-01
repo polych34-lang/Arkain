@@ -5,6 +5,11 @@ exercised against a live database (no `DATABASE_URL` provisioned in this
 environment) or live Naver data (ARK-3's credential blocker) — both are
 mechanical next steps, not open design questions.
 
+**ARK-10 update:** `Order`, `Product`, `Settlement` now carry a required
+`tenantId` (Postgres RLS + application-level scoping) — see
+`docs/multi-tenancy.md`. The idempotent keys below are unchanged in shape
+but now scoped per tenant first.
+
 ## What this is
 
 The second half of the pipeline that starts with the ARK-3 adapter:

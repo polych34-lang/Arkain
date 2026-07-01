@@ -206,6 +206,13 @@ the roadmap below — deliberately, to keep the MVP path short.
    ADR-0002 above. Domain model currently has **no tenant scoping at all**
    (flagged as a correctness gap, not just isolation, in ADR-0002 §1); ARK-10
    implements the `tenant_id`/RLS migration this design specifies.
+7. **Multi-tenancy migration (ARK-10)** — ✅ `tenant_id` + Postgres RLS
+   implemented per ADR-0002 (Order/Product/Settlement scoped, `Seller` reused
+   as the tenant boundary, credential-store AAD hardening). Migration SQL
+   verified against a real Postgres-compatible engine; RLS *enforcement*
+   itself still needs a live Postgres to confirm — see
+   `docs/multi-tenancy.md`. B2B/`dealType` (ADR-0002 §3) and per-tenant HTTP
+   auth are explicitly deferred, not part of this issue.
 
 ## 11. One-way vs two-way doors
 
