@@ -11,6 +11,12 @@ Subsequent ADRs append to `docs/adr/`.
   data isolation (`tenant_id` + PostgreSQL RLS, reusing `Seller` as the tenant
   boundary) and B2B/B2C order-level separation. Design only; ARK-10 implements
   the migration.
+- **TV홈쇼핑 연동 스파이크** (`docs/tv-homeshopping-integration-spike.md`, ARK-15,
+  separate track, channel-expansion priority #2): research only, no code. Finding:
+  API availability is per-channel, not uniform — CJ온스타일 has a documented REST
+  API (adapter-shaped); GS샵's current partner portal looks Excel-download-based,
+  not an adapter fit. Channel priority and whether to build an Excel-import path
+  are CEO decisions, not yet made.
 
 ---
 
