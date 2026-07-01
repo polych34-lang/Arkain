@@ -116,6 +116,19 @@ gained `NormalizedProduct` + an optional `fetchProducts`. Live verification is
 gated on Naver credentials (CEO sign-off) — see
 `docs/naver-commerce-integration.md`.
 
+`EsmAdapter` (ARK-11, G마켓·옥션 ESM 2.0) is the **second** real implementation —
+proves the pattern generalizes without touching the sync engine, domain model, or
+`retry.ts`. Per-request JWT auth (no token-issuance round trip, unlike Naver),
+order pull loops {storefront × status × time-window × page} since the API has no
+"all statuses" mode, product pull is a single paged call. One confidence tier
+below Naver: the wire format is transcribed from public docs, not a live account
+(no ESM PLUS credentials exist yet). Live verification gated on CEO sign-off — see
+`docs/esm-2.0-integration.md`. **Known gap:** `prisma/schema.prisma`'s
+`Marketplace` enum does not yet include `esm_2_0` (deliberately left to ARK-10,
+which was concurrently migrating that same file for tenant_id/RLS) — a real
+ESM 2.0 connection cannot be persisted via `PrismaDomainStore` until that
+one-line addition lands.
+
 ## 6. Correctness conventions (non-negotiable)
 
 - **Money = integer KRW (minor units).** No floats for money, anywhere.
