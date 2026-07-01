@@ -59,3 +59,117 @@ model SyncRun {
   cursor       String?
   error        String?
 }
+
+// --- Unified domain model (ENG-Domain-Model / ARK-4) ------------------------
+//
+// Every marketplace adapter produces the `Normalized*` types in
+// src/integrations/marketplace.ts; src/domain/*.ts maps those into the rows
+// below. A second marketplace (쿠팡) means adding one status-mapping table and
+// one mapper file — these tables and their unique keys never change.
+
+/// Marketplace-agnostic order status. `MIXED` covers a Naver `orderId` whose
+/// line items (`productOrderId`s) have diverged statuses (e.g. partial
+/// cancellation) — see src/integrations/naver/naver.mapper.ts. `UNKNOWN` is the
+/// safe default for any raw status we haven't mapped yet; `rawStatus` on the
+/// row always preserves the marketplace's original string for audit.
+enum OrderStatus {
+  PENDING
+  PAID
+  DISPATCHED
+  DELIVERED
+  CONFIRMED
+  CANCELLED
+  RETURNED
+  EXCHANGED
+  MIXED
+  UNKNOWN
+}
+
+/// Marketplace-agnostic listing status.
+enum ProductStatus {
+  ON_SALE
+  OUT_OF_STOCK
+  SUSPENDED
+  UNKNOWN
+}
+
+/// Unified order. One row per marketplace order (`orderId` for Naver), not per
+/// line item — see OrderItem. Idempotent upsert key: (marketplace,
+/// marketplaceOrderId), matching the local JSON store's key from the ARK-3
+/// spike so re-running a sync never double-counts.
+model Order {
+  id                 String      @id @default(uuid())
+  marketplace        Marketplace
+  marketplaceOrderId String
+  status             OrderStatus
+  /// Marketplace's raw status string, kept verbatim (mapping is best-effort
+  /// and unverified against live data until ARK-3's credential blocker clears).
+  rawStatus          String
+  orderedAt          DateTime
+  buyerName          String?
+  /// Integer KRW (minor unit = won; there are no smaller units). No floats.
+  totalAmountKrw     Int
+  items              OrderItem[]
+  settlements        Settlement[]
+  /// Untouched normalized-order payload (which itself retains the marketplace
+  /// raw response) — see ARCHITECTURE.md §6 "every number must be traceable".
+  raw                Json
+  createdAt          DateTime    @default(now())
+  updatedAt          DateTime    @updatedAt
+
+  @@unique([marketplace, marketplaceOrderId])
+}
+
+/// One line item within an Order (Naver `productOrderId`).
+model OrderItem {
+  id                   String @id @default(uuid())
+  order                Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  orderId              String
+  marketplaceProductId String
+  productName          String
+  quantity             Int
+  unitPriceKrw         Int
+}
+
+/// Unified product/listing. Idempotent upsert key: (marketplace,
+/// marketplaceProductId) — the channel-level listing id, matching the ARK-3
+/// spike's key.
+model Product {
+  id                   String        @id @default(uuid())
+  marketplace          Marketplace
+  marketplaceProductId String
+  /// The marketplace's catalog/origin id when distinct from the listing id
+  /// (Naver: one origin product can have multiple channel products).
+  originProductId      String?
+  name                 String
+  salePriceKrw         Int
+  stockQuantity        Int
+  status               ProductStatus
+  rawStatus            String
+  raw                  Json
+  createdAt            DateTime      @default(now())
+  updatedAt            DateTime      @updatedAt
+
+  @@unique([marketplace, marketplaceProductId])
+}
+
+/// Settlement/payout line. Foundation slice only (ARK-4): no marketplace
+/// adapter produces settlement data yet — that mapping lands with ARK-7. The
+/// shape here is deliberately minimal and will grow once real payout payloads
+/// are seen; correctness conventions (integer KRW, raw preserved) already
+/// apply so ARK-7 has no schema debt to pay down.
+model Settlement {
+  id                 String      @id @default(uuid())
+  marketplace        Marketplace
+  order              Order?      @relation(fields: [orderId], references: [id])
+  orderId            String?
+  marketplaceOrderId String?
+  settledAt          DateTime?
+  payoutAmountKrw    Int
+  feeAmountKrw       Int
+  raw                Json?
+  createdAt          DateTime    @default(now())
+  updatedAt          DateTime    @updatedAt
+
+  @@index([marketplace, marketplaceOrderId])
+}

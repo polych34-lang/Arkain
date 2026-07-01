@@ -169,7 +169,11 @@ the roadmap below — deliberately, to keep the MVP path short.
 1. **ARK-2 ENG-Foundation** — this doc + booting skeleton + CI/secrets. ✅
 2. **ENG-Naver-Spike (ARK-3)** — real 네이버 커머스 API auth + order/product pull.
    ✅ adapter implemented + mock-tested; live run blocked on creds (CEO).
-3. **ENG-Domain-Model** — unified product/order/settlement schema.
+3. **ENG-Domain-Model (ARK-4)** — unified product/order/settlement schema +
+   Naver mapping. ✅ `Order`/`OrderItem`/`Product` tables + status mapping
+   implemented and unit-tested; `Settlement` is a foundation-only slice
+   (mapping lands with ARK-7, no adapter produces settlement data yet). See
+   `docs/domain-model.md`.
 4. **ENG-Orders-MVP** — unified order dashboard pulling live Naver orders.
 5. **ENG-Products-MVP**, 6. **ENG-Settlement-MVP** — after the order loop is proven.
 
