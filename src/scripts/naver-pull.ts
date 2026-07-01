@@ -9,11 +9,26 @@
  *   - NAVER_TEST_ACCOUNT_ID    (optional; set for SELLER-type connections)
  *   - NAVER_PULL_SINCE_DAYS    (optional; default 14)
  *
+ * Credentials may be placed in a local `.env` file — this script loads it via
+ * Node's built-in env-file loader (no dotenv dependency) so the operator's only
+ * step after registering the Naver app is to paste the keys into `.env`. Real
+ * process env vars still take precedence and work with no `.env` present.
+ *
  * With no credentials it exits non-zero with a clear message — the live run is
  * gated on a Naver app registration + scratch store + secrets (a CEO sign-off
  * item; see the ARK-3 integration doc). Everything up to that gate is proven by
  * the unit tests, which exercise this exact adapter against mocked Naver responses.
  */
+
+// Load ./.env into process.env if present (Node >= 20.12). Guarded: a missing
+// file or an older runtime is a no-op — credentials can also come from real env
+// vars. `loadEnvFile` does not overwrite variables already set in the environment.
+try {
+  (process as { loadEnvFile?: (path?: string) => void }).loadEnvFile?.(".env");
+} catch {
+  // .env is optional; ignore ENOENT / parse issues and fall back to process.env.
+}
+
 import { loadEnv } from "../config/env.js";
 import { createLogger } from "../logging/logger.js";
 import type { SellerCredential } from "../integrations/marketplace.js";
