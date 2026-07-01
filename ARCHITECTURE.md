@@ -126,6 +126,16 @@ gained `NormalizedProduct` + an optional `fetchProducts`. Live verification is
 gated on Naver credentials (CEO sign-off) — see
 `docs/naver-commerce-integration.md`.
 
+**ARK-21 (SELLER self-service connect)** adds the write path the spike never
+had: `connectNaverSeller()` verifies a seller-supplied `account_id` (no app
+registration — ARKAIN's own client_id/secret are the app-level keys) before
+persisting, plus a 5-step onboarding wizard (`/onboarding/naver`) and a
+connection status/재연동 screen (`/connections`). No adapter/core change —
+the adapter already supported SELLER-mode tokens since ARK-3. Still gated on
+one human step: SellerDesk's own Naver solution-provider registration, which
+unlocks the real "연결 허용" deep link (`NAVER_SELLER_CONSENT_URL`). See
+`docs/naver-seller-selfservice.md`.
+
 `EsmAdapter` (ARK-11, G마켓·옥션 ESM 2.0) is the **second** real implementation —
 proves the pattern generalizes without touching the sync engine, domain model, or
 `retry.ts`. Per-request JWT auth (no token-issuance round trip, unlike Naver),
@@ -221,6 +231,11 @@ the roadmap below — deliberately, to keep the MVP path short.
    `Account`/`AccountPriceListEntry`/`PurchaseOrder`/`PurchaseOrderItem` are new
    tables, tenant-scoped at the application layer pending ARK-10's RLS policy
    set. See ADR-0003 above and `docs/b2b-module.md`.
+9. **Naver SELLER self-service connect (ARK-21)** — ✅ implemented and tested:
+   connect service, onboarding wizard, connections management screen. Gated on
+   one human step (SellerDesk's Naver solution-provider registration) before
+   the real consent deep link can be filled in. See
+   `docs/naver-seller-selfservice.md`.
 
 ## 11. One-way vs two-way doors
 

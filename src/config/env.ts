@@ -39,6 +39,13 @@ const EnvSchema = z.object({
   // How many days back the pull CLI looks for changed orders. Default 14.
   NAVER_PULL_SINCE_DAYS: z.coerce.number().int().positive().default(14),
 
+  // ARK-21: deep link to Naver's SELLER-mode solution-consent screen, shown
+  // as the "연결 허용" button on /onboarding/naver. Stays unset until
+  // SellerDesk's own solution-provider registration with Naver is approved
+  // (business/legal step, tracked outside this codebase) — the onboarding UI
+  // falls back to manual account-id entry rather than fabricating a URL.
+  NAVER_SELLER_CONSENT_URL: z.string().url().optional(),
+
   // ENG-Orders-MVP (ARK-5): in-process poll interval for the order-sync
   // scheduler. Default 5 minutes. Only takes effect when DATABASE_URL and
   // CREDENTIAL_ENC_KEY are both set (see main.ts).
@@ -92,6 +99,7 @@ export function redactedConfig(cfg: AppConfig): Record<string, unknown> {
     NAVER_COMMERCE_BASE_URL: cfg.NAVER_COMMERCE_BASE_URL,
     NAVER_TEST_ACCOUNT_ID: mask(cfg.NAVER_TEST_ACCOUNT_ID),
     NAVER_PULL_SINCE_DAYS: cfg.NAVER_PULL_SINCE_DAYS,
+    NAVER_SELLER_CONSENT_URL: cfg.NAVER_SELLER_CONSENT_URL ?? "***unset***",
     ORDER_SYNC_INTERVAL_MS: cfg.ORDER_SYNC_INTERVAL_MS,
     ESM_API_BASE_URL: cfg.ESM_API_BASE_URL,
     ESM_MASTER_ID: mask(cfg.ESM_MASTER_ID),

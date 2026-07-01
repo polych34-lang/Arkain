@@ -33,12 +33,14 @@ function buildSyncDeps(
   const b2bStore = new B2BStore(prisma);
   const credentialStore = new EnvelopeCredentialStore(config.CREDENTIAL_ENC_KEY);
 
+  const naverAdapter = new NaverSmartstoreAdapter({
+    baseUrl: config.NAVER_COMMERCE_BASE_URL,
+    clientId: config.NAVER_COMMERCE_CLIENT_ID,
+    clientSecret: config.NAVER_COMMERCE_CLIENT_SECRET,
+  });
+
   const adapters: Partial<Record<MarketplaceId, MarketplaceAdapter>> = {
-    naver_smartstore: new NaverSmartstoreAdapter({
-      baseUrl: config.NAVER_COMMERCE_BASE_URL,
-      clientId: config.NAVER_COMMERCE_CLIENT_ID,
-      clientSecret: config.NAVER_COMMERCE_CLIENT_SECRET,
-    }),
+    naver_smartstore: naverAdapter,
     // ESM 2.0 (ARK-11): no app-level key (per-seller only, see env.ts), so
     // this is always safe to register — a connection simply can't be synced
     // until its per-seller credential is stored via CredentialStore.
@@ -73,6 +75,14 @@ function buildSyncDeps(
       store,
       runSync: async () => engine.syncAll(await loadConnections()),
       b2bStore,
+      // ARK-21: seller self-service Naver connect. `store` structurally
+      // satisfies both `upsertConnection` and `listConnectionSummaries`.
+      connections: {
+        naverAdapter,
+        credentialStore,
+        connectionsStore: store,
+        naverConsentUrl: config.NAVER_SELLER_CONSENT_URL,
+      },
     },
     stopScheduler: scheduler.stop,
   };

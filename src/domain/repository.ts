@@ -45,6 +45,16 @@ export interface ActiveConnection {
   keyVersion: number;
 }
 
+/** One row for the seller-facing 연동 관리 (connections) screen — ARK-21. */
+export interface ConnectionSummary {
+  id: string;
+  marketplace: MarketplaceId;
+  status: string;
+  createdAt: string; // ISO 8601
+  lastSyncedAt: string | null; // ISO 8601, from the latest SyncRun
+  lastSyncStatus: string | null;
+}
+
 export interface SyncRunResult {
   status: "success" | "failed";
   ordersPulled: number;
@@ -146,6 +156,55 @@ export class PrismaDomainStore {
       totalAmountKrw: o.totalAmountKrw,
       itemCount: o.items.length,
     }));
+  }
+
+  /** Seller self-service connect (ARK-21): create-or-replace this tenant's
+   * connection to a marketplace. Upserts on the (sellerId, marketplace)
+   * unique key, so re-running "연동하기"/"재연동" with a fresh credential
+   * just replaces the ciphertext instead of erroring on a duplicate. */
+  async upsertConnection(
+    tenantId: string,
+    marketplace: MarketplaceId,
+    stored: { ciphertext: string; keyVersion: number },
+  ): Promise<{ id: string }> {
+    const row = await this.prisma.marketplaceConnection.upsert({
+      where: { sellerId_marketplace: { sellerId: tenantId, marketplace } },
+      create: {
+        sellerId: tenantId,
+        marketplace,
+        ciphertext: stored.ciphertext,
+        keyVersion: stored.keyVersion,
+        status: "active",
+      },
+      update: {
+        ciphertext: stored.ciphertext,
+        keyVersion: stored.keyVersion,
+        status: "active",
+      },
+    });
+    return { id: row.id };
+  }
+
+  /** The 연동 관리 (connections) screen's read path — one tenant's connections
+   * plus their most recent sync outcome, so a seller can see at a glance
+   * whether a marketplace is healthy or needs 재연동. */
+  async listConnectionSummaries(tenantId: string): Promise<ConnectionSummary[]> {
+    const rows = await this.prisma.marketplaceConnection.findMany({
+      where: { sellerId: tenantId },
+      orderBy: { createdAt: "desc" },
+      include: { syncRuns: { orderBy: { startedAt: "desc" }, take: 1 } },
+    });
+    return rows.map((r) => {
+      const last = r.syncRuns[0];
+      return {
+        id: r.id,
+        marketplace: r.marketplace as MarketplaceId,
+        status: r.status,
+        createdAt: r.createdAt.toISOString(),
+        lastSyncedAt: last?.finishedAt ? last.finishedAt.toISOString() : null,
+        lastSyncStatus: last?.status ?? null,
+      };
+    });
   }
 
   /** Connections the sync scheduler should poll. Credentials stay encrypted here. */

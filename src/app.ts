@@ -2,13 +2,21 @@ import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import { loadEnv, redactedConfig } from "./config/env.js";
 import { createLogger } from "./logging/logger.js";
 import type {
+  ConnectionSummary,
   OrderListFilter,
   OrderListItem,
 } from "./domain/repository.js";
 import type { UnifiedOrderStatus } from "./domain/status.js";
-import type { MarketplaceId } from "./integrations/marketplace.js";
+import type { MarketplaceAdapter, MarketplaceId } from "./integrations/marketplace.js";
 import type { SyncSummary } from "./sync/orderSyncEngine.js";
 import { renderOrdersDashboard } from "./web/ordersDashboard.js";
+import { renderNaverOnboarding } from "./web/naverOnboarding.js";
+import { renderConnectionsDashboard } from "./web/connectionsDashboard.js";
+import {
+  connectNaverSeller,
+  type ConnectionsWriteStore,
+} from "./connect/naverSellerConnect.js";
+import type { CredentialStore } from "./secrets/credentialStore.js";
 import { MissingPriceError } from "./domain/b2b/pricing.js";
 import { InvalidTransitionError } from "./domain/b2b/purchaseOrderStateMachine.js";
 import type {
@@ -23,6 +31,21 @@ import type {
  * structurally. Kept narrow so tests can supply an in-memory fake. */
 export interface OrderReadStore {
   listOrders(filter?: OrderListFilter): Promise<OrderListItem[]>;
+}
+
+/** ARK-21 seller self-service connect surface — `PrismaDomainStore` satisfies
+ * this structurally alongside `ConnectionsWriteStore`. */
+export interface ConnectionsDeps {
+  naverAdapter: MarketplaceAdapter;
+  credentialStore: CredentialStore;
+  connectionsStore: ConnectionsWriteStore & {
+    listConnectionSummaries(tenantId: string): Promise<ConnectionSummary[]>;
+  };
+  /** Deep link to Naver's SELLER-mode consent screen. Undefined until
+   * SellerDesk's solution-provider registration is approved (business/legal
+   * step, out of this issue's scope) — the onboarding UI degrades honestly
+   * to a manual account-id fallback rather than fabricating a link. */
+  naverConsentUrl?: string;
 }
 
 /** ARK-16 B2B module surface — `B2BStore` satisfies this structurally. */
@@ -49,6 +72,8 @@ export interface BuildAppDeps {
   runSync?: () => Promise<SyncSummary[]>;
   /** B2B (ARK-16) read/write path. Omitted the same way `store` is. */
   b2bStore?: B2BStoreDeps;
+  /** Seller self-service Naver connect (ARK-21). Omitted the same way `store` is. */
+  connections?: ConnectionsDeps;
 }
 
 const VALID_STATUSES = new Set<UnifiedOrderStatus>([
@@ -112,6 +137,8 @@ export function buildApp(
     description: "Multi-market seller management — order-sync MVP",
     docs: "/health",
     dashboard: "/orders",
+    onboarding: "/onboarding/naver",
+    connections: "/connections",
   }));
 
   // --- ENG-Orders-MVP (ARK-5): the unified order dashboard --------------
@@ -136,6 +163,56 @@ export function buildApp(
     }
     const results = await deps.runSync();
     return { results };
+  });
+
+  // --- Seller self-service Naver connect (ARK-21) ------------------------
+  app.get("/onboarding/naver", async (_req, reply) => {
+    reply.type("text/html; charset=utf-8");
+    return renderNaverOnboarding({ consentUrl: deps.connections?.naverConsentUrl });
+  });
+
+  app.get("/connections", async (_req, reply) => {
+    reply.type("text/html; charset=utf-8");
+    return renderConnectionsDashboard();
+  });
+
+  app.get("/api/connections", async (req, reply) => {
+    const tenantId = (req.query as Record<string, unknown>).tenantId;
+    if (typeof tenantId !== "string" || !tenantId) {
+      reply.code(400);
+      return { error: "tenantId query param is required" };
+    }
+    if (!deps.connections) {
+      return { configured: false, connections: [] as ConnectionSummary[] };
+    }
+    const connections = await deps.connections.connectionsStore.listConnectionSummaries(tenantId);
+    return { configured: true, connections };
+  });
+
+  app.post("/api/connections/naver/connect", async (req, reply) => {
+    if (!deps.connections) {
+      reply.code(503);
+      return { error: "연동이 아직 설정되지 않았습니다 (DATABASE_URL/CREDENTIAL_ENC_KEY 미설정)" };
+    }
+    const body = (req.body ?? {}) as { tenantId?: string; accountId?: string };
+    if (!body.tenantId || !body.accountId) {
+      reply.code(400);
+      return { error: "tenantId and accountId are required" };
+    }
+    const result = await connectNaverSeller(
+      {
+        adapter: deps.connections.naverAdapter,
+        credentialStore: deps.connections.credentialStore,
+        store: deps.connections.connectionsStore,
+      },
+      body.tenantId,
+      body.accountId.trim(),
+    );
+    if (!result.ok) {
+      reply.code(422);
+      return { error: result.error };
+    }
+    return { connectionId: result.connectionId };
   });
 
   // --- B2B module (ARK-16): 거래처(Account) + 대량발주(PurchaseOrder) -------
