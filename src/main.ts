@@ -3,6 +3,7 @@ import type { Logger } from "pino";
 import { buildApp, type BuildAppDeps } from "./app.js";
 import { loadEnv } from "./config/env.js";
 import { PrismaDomainStore } from "./domain/repository.js";
+import { B2BStore } from "./domain/b2b/repository.js";
 import { NaverSmartstoreAdapter } from "./integrations/naver/naver.adapter.js";
 import { EsmAdapter } from "./integrations/esm/esm.adapter.js";
 import type { MarketplaceAdapter, MarketplaceId } from "./integrations/marketplace.js";
@@ -29,6 +30,7 @@ function buildSyncDeps(
 
   const prisma = new PrismaClient();
   const store = new PrismaDomainStore(prisma);
+  const b2bStore = new B2BStore(prisma);
   const credentialStore = new EnvelopeCredentialStore(config.CREDENTIAL_ENC_KEY);
 
   const adapters: Partial<Record<MarketplaceId, MarketplaceAdapter>> = {
@@ -70,6 +72,7 @@ function buildSyncDeps(
     deps: {
       store,
       runSync: async () => engine.syncAll(await loadConnections()),
+      b2bStore,
     },
     stopScheduler: scheduler.stop,
   };

@@ -1,4 +1,4 @@
-import Fastify from "fastify";
+import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import { loadEnv, redactedConfig } from "./config/env.js";
 import { createLogger } from "./logging/logger.js";
 import type {
@@ -9,11 +9,35 @@ import type { UnifiedOrderStatus } from "./domain/status.js";
 import type { MarketplaceId } from "./integrations/marketplace.js";
 import type { SyncSummary } from "./sync/orderSyncEngine.js";
 import { renderOrdersDashboard } from "./web/ordersDashboard.js";
+import { MissingPriceError } from "./domain/b2b/pricing.js";
+import { InvalidTransitionError } from "./domain/b2b/purchaseOrderStateMachine.js";
+import type {
+  Account,
+  CreateAccountInput,
+  CreatePurchaseOrderInput,
+  PurchaseOrder,
+  PurchaseOrderListFilter,
+} from "./domain/b2b/types.js";
 
 /** The dashboard's read dependency — `PrismaDomainStore` satisfies this
  * structurally. Kept narrow so tests can supply an in-memory fake. */
 export interface OrderReadStore {
   listOrders(filter?: OrderListFilter): Promise<OrderListItem[]>;
+}
+
+/** ARK-16 B2B module surface — `B2BStore` satisfies this structurally. */
+export interface B2BStoreDeps {
+  createAccount(input: CreateAccountInput): Promise<Account>;
+  listAccounts(tenantId: string): Promise<Account[]>;
+  upsertPriceListEntry(
+    tenantId: string,
+    entry: { accountId: string; sku: string; productName: string; unitPriceKrw: number },
+  ): Promise<void>;
+  createPurchaseOrder(input: CreatePurchaseOrderInput): Promise<PurchaseOrder>;
+  listPurchaseOrders(filter: PurchaseOrderListFilter): Promise<PurchaseOrder[]>;
+  submitPurchaseOrder(tenantId: string, id: string): Promise<PurchaseOrder>;
+  approvePurchaseOrder(tenantId: string, id: string): Promise<PurchaseOrder>;
+  rejectPurchaseOrder(tenantId: string, id: string, reason: string): Promise<PurchaseOrder>;
 }
 
 export interface BuildAppDeps {
@@ -23,6 +47,8 @@ export interface BuildAppDeps {
   /** Triggers one sync cycle on demand (demo/ops convenience alongside the
    * scheduler). Omitted the same way `store` is. */
   runSync?: () => Promise<SyncSummary[]>;
+  /** B2B (ARK-16) read/write path. Omitted the same way `store` is. */
+  b2bStore?: B2BStoreDeps;
 }
 
 const VALID_STATUSES = new Set<UnifiedOrderStatus>([
@@ -111,6 +137,127 @@ export function buildApp(
     const results = await deps.runSync();
     return { results };
   });
+
+  // --- B2B module (ARK-16): 거래처(Account) + 대량발주(PurchaseOrder) -------
+  //
+  // No auth/session layer yet (ADR-0002 §2d gap, not re-litigated here), so
+  // `tenantId` is taken as an explicit request field for now, same interim
+  // posture as the rest of the pre-auth API surface.
+  if (deps.b2bStore) {
+    const b2bStore = deps.b2bStore;
+
+    app.post("/api/b2b/accounts", async (req, reply) => {
+      const body = req.body as Partial<CreateAccountInput>;
+      if (!body.tenantId || !body.name) {
+        reply.code(400);
+        return { error: "tenantId and name are required" };
+      }
+      const account = await b2bStore.createAccount(body as CreateAccountInput);
+      return { account };
+    });
+
+    app.get("/api/b2b/accounts", async (req, reply) => {
+      const tenantId = (req.query as Record<string, unknown>).tenantId;
+      if (typeof tenantId !== "string") {
+        reply.code(400);
+        return { error: "tenantId query param is required" };
+      }
+      const accounts = await b2bStore.listAccounts(tenantId);
+      return { accounts };
+    });
+
+    app.post("/api/b2b/accounts/:accountId/prices", async (req, reply) => {
+      const { accountId } = req.params as { accountId: string };
+      const body = req.body as {
+        tenantId?: string;
+        sku?: string;
+        productName?: string;
+        unitPriceKrw?: number;
+      };
+      if (!body.tenantId || !body.sku || !body.productName || body.unitPriceKrw == null) {
+        reply.code(400);
+        return { error: "tenantId, sku, productName, unitPriceKrw are required" };
+      }
+      await b2bStore.upsertPriceListEntry(body.tenantId, {
+        accountId,
+        sku: body.sku,
+        productName: body.productName,
+        unitPriceKrw: body.unitPriceKrw,
+      });
+      return { ok: true };
+    });
+
+    app.post("/api/b2b/purchase-orders", async (req, reply) => {
+      const body = req.body as Partial<CreatePurchaseOrderInput>;
+      if (!body.tenantId || !body.accountId || !body.lines?.length) {
+        reply.code(400);
+        return { error: "tenantId, accountId, and at least one line are required" };
+      }
+      try {
+        const order = await b2bStore.createPurchaseOrder(body as CreatePurchaseOrderInput);
+        return { order };
+      } catch (err) {
+        if (err instanceof MissingPriceError) {
+          reply.code(422);
+          return { error: err.message };
+        }
+        throw err;
+      }
+    });
+
+    app.get("/api/b2b/purchase-orders", async (req, reply) => {
+      const query = req.query as Record<string, unknown>;
+      if (typeof query.tenantId !== "string") {
+        reply.code(400);
+        return { error: "tenantId query param is required" };
+      }
+      const filter: PurchaseOrderListFilter = { tenantId: query.tenantId };
+      if (typeof query.accountId === "string") filter.accountId = query.accountId;
+      if (typeof query.status === "string") {
+        filter.status = query.status as PurchaseOrderListFilter["status"];
+      }
+      const orders = await b2bStore.listPurchaseOrders(filter);
+      return { orders };
+    });
+
+    const transitionHandler =
+      (
+        run: (tenantId: string, id: string, body: Record<string, unknown>) => Promise<PurchaseOrder>,
+      ) =>
+      async (req: FastifyRequest, reply: FastifyReply) => {
+        const { id } = req.params as { id: string };
+        const body = (req.body ?? {}) as { tenantId?: string; reason?: string };
+        if (!body.tenantId) {
+          reply.code(400);
+          return { error: "tenantId is required" };
+        }
+        try {
+          const order = await run(body.tenantId, id, body);
+          return { order };
+        } catch (err) {
+          if (err instanceof InvalidTransitionError) {
+            reply.code(409);
+            return { error: err.message };
+          }
+          throw err;
+        }
+      };
+
+    app.post(
+      "/api/b2b/purchase-orders/:id/submit",
+      transitionHandler((tenantId, id) => b2bStore.submitPurchaseOrder(tenantId, id)),
+    );
+    app.post(
+      "/api/b2b/purchase-orders/:id/approve",
+      transitionHandler((tenantId, id) => b2bStore.approvePurchaseOrder(tenantId, id)),
+    );
+    app.post(
+      "/api/b2b/purchase-orders/:id/reject",
+      transitionHandler((tenantId, id, body) =>
+        b2bStore.rejectPurchaseOrder(tenantId, id, (body.reason as string) ?? ""),
+      ),
+    );
+  }
 
   logger.info({ config: redactedConfig(config) }, "ARKAIN app constructed");
   return { app, config };

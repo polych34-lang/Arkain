@@ -11,6 +11,10 @@ Subsequent ADRs append to `docs/adr/`.
   data isolation (`tenant_id` + PostgreSQL RLS, reusing `Seller` as the tenant
   boundary) and B2B/B2C order-level separation. Design only; ARK-10 implements
   the migration.
+- **ADR-0003** (`docs/adr/0003-b2b-accounts-purchase-orders.md`, ARK-16): 거래처
+  (`Account`) management + direct 대량발주 (`PurchaseOrder`) flow, deliberately
+  **separate tables** from `Order`/`OrderItem` — not an extension of ADR-0002's
+  `dealType` flag. Design + basic implementation done.
 
 ---
 
@@ -200,6 +204,10 @@ the roadmap below — deliberately, to keep the MVP path short.
    ADR-0002 above. Domain model currently has **no tenant scoping at all**
    (flagged as a correctness gap, not just isolation, in ADR-0002 §1); ARK-10
    implements the `tenant_id`/RLS migration this design specifies.
+7. **B2B module: 거래처 + 대량발주 (ARK-16)** — ✅ design + basic implementation.
+   `Account`/`AccountPriceListEntry`/`PurchaseOrder`/`PurchaseOrderItem` are new
+   tables, tenant-scoped at the application layer pending ARK-10's RLS policy
+   set. See ADR-0003 above and `docs/b2b-module.md`.
 
 ## 11. One-way vs two-way doors
 
