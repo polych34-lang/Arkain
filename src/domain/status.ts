@@ -58,6 +58,32 @@ const NAVER_PRODUCT_STATUS: Record<string, UnifiedProductStatus> = {
   DELETE: "SUSPENDED",
 };
 
+/**
+ * ESM 2.0 (G마켓/옥션 ESM Trading API) `OrderStatus` -> unified. Values per
+ * https://etapi.gmarket.com/67 (주문조회 API), confirmed via public docs but
+ * NOT against a live account (ARK-11 credential caveat — see
+ * docs/esm-2.0-integration.md §7). Numeric codes are stringified since
+ * `NormalizedOrder.status`/`NormalizedProduct.status` are `string`.
+ */
+const ESM_ORDER_STATUS: Record<string, UnifiedOrderStatus> = {
+  "1": "PENDING", // 신규주문
+  "2": "PAID", // 발송대기
+  "3": "DISPATCHED", // 배송중
+  "4": "DELIVERED", // 배송완료
+  "5": "CONFIRMED", // 구매확정
+};
+
+/**
+ * ESM 2.0 `sellStatus` (product, per-site: gmkt/iac) -> unified. Codes per
+ * https://etapi.gmarket.com/160 (상품 목록 조회 API). Same live-data caveat.
+ */
+const ESM_PRODUCT_STATUS: Record<string, UnifiedProductStatus> = {
+  "11": "ON_SALE",
+  "21": "SUSPENDED", // 판매중지
+  "22": "SUSPENDED", // 판매보류
+  "31": "OUT_OF_STOCK",
+};
+
 const ORDER_STATUS_BY_MARKETPLACE: Record<
   MarketplaceId,
   Record<string, UnifiedOrderStatus> | undefined
@@ -65,6 +91,7 @@ const ORDER_STATUS_BY_MARKETPLACE: Record<
   naver_smartstore: NAVER_ORDER_STATUS,
   coupang: undefined,
   eleven_st: undefined,
+  esm_2_0: ESM_ORDER_STATUS,
 };
 
 const PRODUCT_STATUS_BY_MARKETPLACE: Record<
@@ -74,6 +101,7 @@ const PRODUCT_STATUS_BY_MARKETPLACE: Record<
   naver_smartstore: NAVER_PRODUCT_STATUS,
   coupang: undefined,
   eleven_st: undefined,
+  esm_2_0: ESM_PRODUCT_STATUS,
 };
 
 export function toUnifiedOrderStatus(

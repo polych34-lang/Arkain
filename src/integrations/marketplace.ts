@@ -10,7 +10,11 @@
  * unified product/order/settlement schema is owned by ENG-Domain-Model.
  */
 
-export type MarketplaceId = "naver_smartstore" | "coupang" | "eleven_st";
+export type MarketplaceId =
+  | "naver_smartstore"
+  | "coupang"
+  | "eleven_st"
+  | "esm_2_0";
 
 /** Opaque, resolved per-seller credentials handed to an adapter at call time. */
 export interface SellerCredential {

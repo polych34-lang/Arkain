@@ -43,6 +43,18 @@ const EnvSchema = z.object({
   // scheduler. Default 5 minutes. Only takes effect when DATABASE_URL and
   // CREDENTIAL_ENC_KEY are both set (see main.ts).
   ORDER_SYNC_INTERVAL_MS: z.coerce.number().int().positive().default(300_000),
+
+  // ESM 2.0 (G마켓/옥션, ARK-11). Unlike Naver, ESM has no app-level shared
+  // key — every field below is per-seller (one ESM PLUS master account).
+  // These env vars exist only to drive the `esm:pull` scratch/dev CLI; real
+  // per-seller credentials go through CredentialStore, never env, in prod.
+  ESM_API_BASE_URL: z.string().url().default("https://sa2.esmplus.com"),
+  ESM_MASTER_ID: z.string().optional(),
+  ESM_SECRET_KEY: z.string().optional(),
+  ESM_CLIENT_DOMAIN: z.string().optional(),
+  ESM_AUCTION_SELLER_ID: z.string().optional(),
+  ESM_GMARKET_SELLER_ID: z.string().optional(),
+  ESM_PULL_SINCE_DAYS: z.coerce.number().int().positive().default(14),
 });
 
 export type AppConfig = z.infer<typeof EnvSchema>;
@@ -81,5 +93,12 @@ export function redactedConfig(cfg: AppConfig): Record<string, unknown> {
     NAVER_TEST_ACCOUNT_ID: mask(cfg.NAVER_TEST_ACCOUNT_ID),
     NAVER_PULL_SINCE_DAYS: cfg.NAVER_PULL_SINCE_DAYS,
     ORDER_SYNC_INTERVAL_MS: cfg.ORDER_SYNC_INTERVAL_MS,
+    ESM_API_BASE_URL: cfg.ESM_API_BASE_URL,
+    ESM_MASTER_ID: mask(cfg.ESM_MASTER_ID),
+    ESM_SECRET_KEY: mask(cfg.ESM_SECRET_KEY),
+    ESM_CLIENT_DOMAIN: mask(cfg.ESM_CLIENT_DOMAIN),
+    ESM_AUCTION_SELLER_ID: mask(cfg.ESM_AUCTION_SELLER_ID),
+    ESM_GMARKET_SELLER_ID: mask(cfg.ESM_GMARKET_SELLER_ID),
+    ESM_PULL_SINCE_DAYS: cfg.ESM_PULL_SINCE_DAYS,
   };
 }
