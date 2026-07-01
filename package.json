@@ -14,6 +14,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "naver:pull": "tsx src/scripts/naver-pull.ts",
+    "seed:demo": "tsx src/scripts/seed-demo-orders.ts",
     "lint": "tsc -p tsconfig.json --noEmit",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",

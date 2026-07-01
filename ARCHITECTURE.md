@@ -174,7 +174,10 @@ the roadmap below — deliberately, to keep the MVP path short.
    implemented and unit-tested; `Settlement` is a foundation-only slice
    (mapping lands with ARK-7, no adapter produces settlement data yet). See
    `docs/domain-model.md`.
-4. **ENG-Orders-MVP** — unified order dashboard pulling live Naver orders.
+4. **ENG-Orders-MVP (ARK-5)** — sync engine + unified order dashboard. ✅
+   implemented and unit-tested (poll loop, cursor resume, dashboard UI/API);
+   live Naver data still gated on ARK-3's credential blocker. See
+   `docs/order-sync-mvp.md`.
 5. **ENG-Products-MVP**, 6. **ENG-Settlement-MVP** — after the order loop is proven.
 
 ## 11. One-way vs two-way doors

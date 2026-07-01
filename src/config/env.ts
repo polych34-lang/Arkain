@@ -38,6 +38,11 @@ const EnvSchema = z.object({
   NAVER_TEST_ACCOUNT_ID: z.string().optional(),
   // How many days back the pull CLI looks for changed orders. Default 14.
   NAVER_PULL_SINCE_DAYS: z.coerce.number().int().positive().default(14),
+
+  // ENG-Orders-MVP (ARK-5): in-process poll interval for the order-sync
+  // scheduler. Default 5 minutes. Only takes effect when DATABASE_URL and
+  // CREDENTIAL_ENC_KEY are both set (see main.ts).
+  ORDER_SYNC_INTERVAL_MS: z.coerce.number().int().positive().default(300_000),
 });
 
 export type AppConfig = z.infer<typeof EnvSchema>;
@@ -75,5 +80,6 @@ export function redactedConfig(cfg: AppConfig): Record<string, unknown> {
     NAVER_COMMERCE_BASE_URL: cfg.NAVER_COMMERCE_BASE_URL,
     NAVER_TEST_ACCOUNT_ID: mask(cfg.NAVER_TEST_ACCOUNT_ID),
     NAVER_PULL_SINCE_DAYS: cfg.NAVER_PULL_SINCE_DAYS,
+    ORDER_SYNC_INTERVAL_MS: cfg.ORDER_SYNC_INTERVAL_MS,
   };
 }
