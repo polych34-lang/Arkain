@@ -26,13 +26,19 @@ function order(id: string): NormalizedOrder {
 }
 
 /** In-memory fake of the narrow store the engine depends on — no DB needed. */
-function fakeStore(): OrderSyncStore & { runs: Array<{ status: string; ordersPulled: number; error?: string }>; upserted: NormalizedOrder[] } {
+function fakeStore(): OrderSyncStore & {
+  runs: Array<{ status: string; ordersPulled: number; error?: string }>;
+  upserted: NormalizedOrder[];
+  tenantIdsSeen: string[];
+} {
   const upserted: NormalizedOrder[] = [];
   const runs: Array<{ status: string; ordersPulled: number; error?: string }> = [];
+  const tenantIdsSeen: string[] = [];
   const cursors = new Map<string, string>();
   return {
     upserted,
     runs,
+    tenantIdsSeen,
     async getLastCursor(connectionId) {
       return cursors.get(connectionId);
     },
@@ -43,8 +49,9 @@ function fakeStore(): OrderSyncStore & { runs: Array<{ status: string; ordersPul
       runs.push(result);
       if (result.cursor) cursors.set("conn-1", result.cursor);
     },
-    async upsertOrders(orders) {
+    async upsertOrders(orders, tenantId) {
       upserted.push(...orders);
+      tenantIdsSeen.push(tenantId);
       return upserted.length;
     },
   };
@@ -81,6 +88,20 @@ describe("OrderSyncEngine.syncConnection", () => {
     expect(store.upserted).toHaveLength(3);
     expect(adapter.fetchOrders).toHaveBeenCalledTimes(2);
     expect(store.runs).toEqual([{ status: "success", ordersPulled: 3, cursor: undefined }]);
+  });
+
+  it("threads the connection's credential.sellerId through as the tenantId (ARK-10)", async () => {
+    const store = fakeStore();
+    const adapter: MarketplaceAdapter = {
+      id: "naver_smartstore",
+      verifyCredential: vi.fn(),
+      fetchOrders: vi.fn(async () => ({ orders: [order("o1")] })),
+    };
+    const engine = new OrderSyncEngine({ naver_smartstore: adapter }, store);
+    await engine.syncConnection(
+      connection({ credential: { sellerId: "seller-42", marketplace: "naver_smartstore", secret: {} } }),
+    );
+    expect(store.tenantIdsSeen).toEqual(["seller-42"]);
   });
 
   it("resumes from the last successful cursor instead of the default lookback", async () => {

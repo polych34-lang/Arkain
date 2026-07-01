@@ -38,7 +38,9 @@ export interface OrderSyncStore {
       error?: string;
     },
   ): Promise<void>;
-  upsertOrders(orders: NormalizedOrder[]): Promise<number>;
+  /** ARK-10: tenantId scopes the upsert (and Postgres RLS session) to this
+   * connection's seller — see docs/multi-tenancy.md. */
+  upsertOrders(orders: NormalizedOrder[], tenantId: string): Promise<number>;
 }
 
 export interface SyncSummary {
@@ -106,7 +108,7 @@ export class OrderSyncEngine {
         const page = await adapter.fetchOrders(conn.credential, { since, cursor });
         ordersFetched += page.orders.length;
         if (page.orders.length > 0) {
-          totalOrders = await this.store.upsertOrders(page.orders);
+          totalOrders = await this.store.upsertOrders(page.orders, conn.credential.sellerId);
         }
         cursor = page.nextCursor;
         pages++;

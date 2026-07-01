@@ -81,8 +81,14 @@ async function main(): Promise<void> {
 
   const prisma = new PrismaClient();
   const store = new PrismaDomainStore(prisma);
-  const total = await store.upsertOrders(DEMO_ORDERS);
-  console.log(`Seeded ${DEMO_ORDERS.length} demo orders (table total: ${total}). Visit /orders to view them.`);
+  // ARK-10: orders are tenant-scoped now, so the demo needs a demo tenant.
+  const demoSeller = await prisma.seller.upsert({
+    where: { id: "demo-seller" },
+    create: { id: "demo-seller", displayName: "데모 셀러" },
+    update: {},
+  });
+  const total = await store.upsertOrders(DEMO_ORDERS, demoSeller.id);
+  console.log(`Seeded ${DEMO_ORDERS.length} demo orders (tenant total: ${total}). Visit /orders to view them.`);
   await prisma.$disconnect();
 }
 

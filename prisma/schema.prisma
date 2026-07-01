@@ -18,13 +18,24 @@ enum Marketplace {
   naver_smartstore
   coupang
   eleven_st
+  esm_2_0
 }
 
+/// ARK-10 (per ADR-0002, docs/adr/0002-multi-tenancy-b2b-b2c.md): `Seller`
+/// doubles as ARKAIN's tenant boundary — one row per seller business onboarded
+/// onto ARKAIN, the unit Postgres RLS isolates on. There is no separate
+/// `Tenant` model; introducing one would duplicate this table with no
+/// behavior difference today (upgrade path: insert `Tenant` above `Seller`
+/// later if one customer ever owns multiple stores — every downstream column
+/// is already named `tenantId`, not `sellerId`, to keep that door open).
 model Seller {
   id                      String                  @id @default(uuid())
   displayName             String
   createdAt               DateTime                @default(now())
   connections             MarketplaceConnection[]
+  orders                  Order[]
+  products                Product[]
+  settlements             Settlement[]
   accounts                Account[]
   accountPriceListEntries AccountPriceListEntry[]
   purchaseOrders          PurchaseOrder[]
@@ -101,7 +112,13 @@ enum ProductStatus {
 /// marketplaceOrderId), matching the local JSON store's key from the ARK-3
 /// spike so re-running a sync never double-counts.
 model Order {
-  id                 String       @id @default(uuid())
+  id                 String      @id @default(uuid())
+  /// ARK-10 (ADR-0002 §2b): tenant boundary (-> Seller.id). Required — every
+  /// write path (OrderSyncEngine) sets it, there's no pre-migration data to
+  /// backfill (no migration has ever run against a live DB — see
+  /// docs/multi-tenancy.md). Enforced again at the DB layer by Postgres RLS.
+  tenant             Seller      @relation(fields: [tenantId], references: [id])
+  tenantId           String
   marketplace        Marketplace
   marketplaceOrderId String
   status             OrderStatus
@@ -120,10 +137,19 @@ model Order {
   createdAt          DateTime     @default(now())
   updatedAt          DateTime     @updatedAt
 
-  @@unique([marketplace, marketplaceOrderId])
+  /// Scoped per tenant so two sellers can never collide on the same
+  /// marketplace order id (the ARK-10 bug this migration fixes — the prior
+  /// key had no tenant scope at all).
+  @@unique([tenantId, marketplace, marketplaceOrderId])
 }
 
-/// One line item within an Order (Naver `productOrderId`).
+/// One line item within an Order (Naver `productOrderId`). Deliberately has
+/// no `tenantId` of its own (ADR-0002 §2b): it's only ever reached via its
+/// parent Order (nested create/include, cascade delete), so RLS on `Order`
+/// already scopes it in every query path this app has today. A denormalized
+/// copy here would be copy-paste scoping that can drift out of sync — see
+/// docs/multi-tenancy.md for the residual gap this accepts (a future
+/// direct/raw query against OrderItem alone would not be RLS-protected).
 model OrderItem {
   id                   String @id @default(uuid())
   order                Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
@@ -134,11 +160,13 @@ model OrderItem {
   unitPriceKrw         Int
 }
 
-/// Unified product/listing. Idempotent upsert key: (marketplace,
+/// Unified product/listing. Idempotent upsert key: (tenantId, marketplace,
 /// marketplaceProductId) — the channel-level listing id, matching the ARK-3
-/// spike's key.
+/// spike's key, now scoped per tenant (ARK-10).
 model Product {
   id                   String        @id @default(uuid())
+  tenant               Seller        @relation(fields: [tenantId], references: [id])
+  tenantId             String
   marketplace          Marketplace
   marketplaceProductId String
   /// The marketplace's catalog/origin id when distinct from the listing id
@@ -153,16 +181,19 @@ model Product {
   createdAt            DateTime      @default(now())
   updatedAt            DateTime      @updatedAt
 
-  @@unique([marketplace, marketplaceProductId])
+  @@unique([tenantId, marketplace, marketplaceProductId])
 }
 
 /// Settlement/payout line. Foundation slice only (ARK-4): no marketplace
 /// adapter produces settlement data yet — that mapping lands with ARK-7. The
 /// shape here is deliberately minimal and will grow once real payout payloads
 /// are seen; correctness conventions (integer KRW, raw preserved) already
-/// apply so ARK-7 has no schema debt to pay down.
+/// apply so ARK-7 has no schema debt to pay down. `tenantId` (ARK-10) added
+/// now so ARK-7 has no migration debt either.
 model Settlement {
   id                 String      @id @default(uuid())
+  tenant             Seller      @relation(fields: [tenantId], references: [id])
+  tenantId           String
   marketplace        Marketplace
   order              Order?      @relation(fields: [orderId], references: [id])
   orderId            String?
@@ -174,7 +205,7 @@ model Settlement {
   createdAt          DateTime    @default(now())
   updatedAt          DateTime    @updatedAt
 
-  @@index([marketplace, marketplaceOrderId])
+  @@index([tenantId, marketplace, marketplaceOrderId])
 }
 
 // --- B2B module: 거래처(Account) + 대량발주(PurchaseOrder) (ARK-16) ---------

@@ -10,6 +10,7 @@ import {
   toOrderScalarFields,
   toProductUpsertInput,
 } from "./mappers.js";
+import { forTenant } from "../tenancy/tenantContext.js";
 
 /** One row in the unified order dashboard. Money in integer KRW. */
 export interface OrderListItem {
@@ -29,6 +30,10 @@ export interface OrderListFilter {
   status?: UnifiedOrderStatus;
   /** Default 50, capped at 200 so the dashboard can't accidentally page the whole table. */
   limit?: number;
+  /** ARK-10: scope to one tenant (Seller.id). Omitted only by the pre-auth
+   * global ops dashboard (docs/multi-tenancy.md) — every tenant-facing caller
+   * must set this once per-session auth exists. */
+  tenantId?: string;
 }
 
 /** An active seller<->marketplace connection, credential still encrypted. */
@@ -57,18 +62,24 @@ export interface SyncRunResult {
 export class PrismaDomainStore {
   constructor(private readonly prisma: PrismaClient) {}
 
-  /** Upsert orders by `(marketplace, marketplaceOrderId)`; returns new total count. */
-  async upsertOrders(orders: NormalizedOrder[]): Promise<number> {
+  /** Upsert one tenant's orders by `(tenantId, marketplace,
+   * marketplaceOrderId)` (ARK-10 — previously unscoped, so two sellers with
+   * the same marketplace order id would collide); returns the tenant's new
+   * order count. Runs through `forTenant` so Postgres RLS applies alongside
+   * this explicit scoping (docs/multi-tenancy.md). */
+  async upsertOrders(orders: NormalizedOrder[], tenantId: string): Promise<number> {
+    const tenantPrisma = forTenant(this.prisma, tenantId);
     for (const order of orders) {
       const where = {
-        marketplace_marketplaceOrderId: {
+        tenantId_marketplace_marketplaceOrderId: {
+          tenantId,
           marketplace: order.marketplace,
           marketplaceOrderId: order.marketplaceOrderId,
         },
       };
-      const scalars = toOrderScalarFields(order);
+      const scalars = toOrderScalarFields(order, tenantId);
       const items = toOrderItemsCreate(order);
-      await this.prisma.order.upsert({
+      await tenantPrisma.order.upsert({
         where,
         create: { ...scalars, items: { create: items } },
         // No nested "replace" op in Prisma — clear and recreate items so a
@@ -76,16 +87,19 @@ export class PrismaDomainStore {
         update: { ...scalars, items: { deleteMany: {}, create: items } },
       });
     }
-    return this.prisma.order.count();
+    return tenantPrisma.order.count({ where: { tenantId } });
   }
 
-  /** Upsert products by `(marketplace, marketplaceProductId)`; returns new total count. */
-  async upsertProducts(products: NormalizedProduct[]): Promise<number> {
+  /** Upsert one tenant's products by `(tenantId, marketplace,
+   * marketplaceProductId)` (ARK-10); returns the tenant's new product count. */
+  async upsertProducts(products: NormalizedProduct[], tenantId: string): Promise<number> {
+    const tenantPrisma = forTenant(this.prisma, tenantId);
     for (const product of products) {
-      const input = toProductUpsertInput(product);
-      await this.prisma.product.upsert({
+      const input = toProductUpsertInput(product, tenantId);
+      await tenantPrisma.product.upsert({
         where: {
-          marketplace_marketplaceProductId: {
+          tenantId_marketplace_marketplaceProductId: {
+            tenantId,
             marketplace: product.marketplace,
             marketplaceProductId: product.marketplaceProductId,
           },
@@ -94,21 +108,33 @@ export class PrismaDomainStore {
         update: input,
       });
     }
-    return this.prisma.product.count();
+    return tenantPrisma.product.count({ where: { tenantId } });
   }
 
-  /** The unified order dashboard's read path. Newest orders first. */
+  /** The unified order dashboard's read path. Newest orders first.
+   *
+   * ARK-10: when `filter.tenantId` is set, this runs through `forTenant` and
+   * filters explicitly by tenant — the caller's real isolation boundary.
+   * When omitted, it runs as a plain global read: today's pre-auth ops
+   * dashboard has no per-request tenant to supply. That global path is only
+   * safe from a privileged (superuser/BYPASSRLS) DB connection — see
+   * docs/multi-tenancy.md — and is expected to go away once per-tenant
+   * auth/session lands (tracked separately from this issue). */
   async listOrders(filter: OrderListFilter = {}): Promise<OrderListItem[]> {
     const limit = Math.min(filter.limit ?? 50, 200);
-    const orders = await this.prisma.order.findMany({
+    const args = {
       where: {
+        tenantId: filter.tenantId,
         marketplace: filter.marketplace,
         status: filter.status,
       },
-      orderBy: { orderedAt: "desc" },
+      orderBy: { orderedAt: "desc" as const },
       take: limit,
       include: { items: true },
-    });
+    };
+    const orders = filter.tenantId
+      ? await forTenant(this.prisma, filter.tenantId).order.findMany(args)
+      : await this.prisma.order.findMany(args);
     return orders.map((o) => ({
       id: o.id,
       marketplace: o.marketplace as MarketplaceId,

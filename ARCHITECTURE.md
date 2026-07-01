@@ -15,6 +15,12 @@ Subsequent ADRs append to `docs/adr/`.
   (`Account`) management + direct 대량발주 (`PurchaseOrder`) flow, deliberately
   **separate tables** from `Order`/`OrderItem` — not an extension of ADR-0002's
   `dealType` flag. Design + basic implementation done.
+- **TV홈쇼핑 연동 스파이크** (`docs/tv-homeshopping-integration-spike.md`, ARK-15,
+  separate track, channel-expansion priority #2): research only, no code. Finding:
+  API availability is per-channel, not uniform — CJ온스타일 has a documented REST
+  API (adapter-shaped); GS샵's current partner portal looks Excel-download-based,
+  not an adapter fit. Channel priority and whether to build an Excel-import path
+  are CEO decisions, not yet made.
 
 ---
 
@@ -204,7 +210,14 @@ the roadmap below — deliberately, to keep the MVP path short.
    ADR-0002 above. Domain model currently has **no tenant scoping at all**
    (flagged as a correctness gap, not just isolation, in ADR-0002 §1); ARK-10
    implements the `tenant_id`/RLS migration this design specifies.
-7. **B2B module: 거래처 + 대량발주 (ARK-16)** — ✅ design + basic implementation.
+7. **Multi-tenancy migration (ARK-10)** — ✅ `tenant_id` + Postgres RLS
+   implemented per ADR-0002 (Order/Product/Settlement scoped, `Seller` reused
+   as the tenant boundary, credential-store AAD hardening). Migration SQL
+   verified against a real Postgres-compatible engine; RLS *enforcement*
+   itself still needs a live Postgres to confirm — see
+   `docs/multi-tenancy.md`. B2B/`dealType` (ADR-0002 §3) and per-tenant HTTP
+   auth are explicitly deferred, not part of this issue.
+8. **B2B module: 거래처 + 대량발주 (ARK-16)** — ✅ design + basic implementation.
    `Account`/`AccountPriceListEntry`/`PurchaseOrder`/`PurchaseOrderItem` are new
    tables, tenant-scoped at the application layer pending ARK-10's RLS policy
    set. See ADR-0003 above and `docs/b2b-module.md`.

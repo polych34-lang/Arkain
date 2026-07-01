@@ -13,11 +13,15 @@ import { toUnifiedOrderStatus, toUnifiedProductStatus } from "./status.js";
  */
 
 /** Order scalar fields only (no items) — shared by the create and update
- * branches of `prisma.order.upsert` in domain/repository.ts. */
+ * branches of `prisma.order.upsert` in domain/repository.ts. `tenantId`
+ * (ARK-10) is a domain-layer concept applied here, after normalization —
+ * `NormalizedOrder` itself stays marketplace-agnostic and tenant-agnostic. */
 export function toOrderScalarFields(
   order: NormalizedOrder,
+  tenantId: string,
 ): Omit<Prisma.OrderCreateInput, "items"> {
   return {
+    tenant: { connect: { id: tenantId } },
     marketplace: order.marketplace,
     marketplaceOrderId: order.marketplaceOrderId,
     status: toUnifiedOrderStatus(order.marketplace, order.status),
@@ -30,7 +34,9 @@ export function toOrderScalarFields(
 }
 
 /** Line items for nested create. Reused for the upsert's update branch after
- * an idempotent `deleteMany` (Prisma has no nested "replace" op). */
+ * an idempotent `deleteMany` (Prisma has no nested "replace" op). No
+ * `tenantId` of its own (ADR-0002 §2b) — see the OrderItem doc comment in
+ * schema.prisma. */
 export function toOrderItemsCreate(
   order: NormalizedOrder,
 ): Prisma.OrderItemCreateWithoutOrderInput[] {
@@ -45,9 +51,10 @@ export function toOrderItemsCreate(
 /** Order + its line items, keyed for the create branch of `prisma.order.upsert`. */
 export function toOrderUpsertInput(
   order: NormalizedOrder,
+  tenantId: string,
 ): Prisma.OrderCreateInput {
   return {
-    ...toOrderScalarFields(order),
+    ...toOrderScalarFields(order, tenantId),
     items: { create: toOrderItemsCreate(order) },
   };
 }
@@ -55,8 +62,10 @@ export function toOrderUpsertInput(
 /** Product keyed for `prisma.product.upsert`. */
 export function toProductUpsertInput(
   product: NormalizedProduct,
+  tenantId: string,
 ): Prisma.ProductCreateInput {
   return {
+    tenant: { connect: { id: tenantId } },
     marketplace: product.marketplace,
     marketplaceProductId: product.marketplaceProductId,
     originProductId: product.originProductId,

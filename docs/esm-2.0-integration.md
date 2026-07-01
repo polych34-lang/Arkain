@@ -185,11 +185,17 @@ AGENTS.md 경계상 "실 셀러 자격증명·운영 마켓 계정은 CEO 명시
    주문/상품이 있는 테스트 계정 권장(네이버와 동일 원칙).
 4. **시크릿 전달 경로** — 레포 커밋 금지, ARCHITECTURE.md §7의 시크릿 플랜을 따름.
 
-또한 (별도 트랙, CEO 액션 아님): **ARK-10**(멀티테넌시 마이그레이션)이 현재
+~~또한 (별도 트랙, CEO 액션 아님): **ARK-10**(멀티테넌시 마이그레이션)이 현재
 `prisma/schema.prisma`의 `Marketplace` enum을 동시에 수정 중이라, 이번 작업에서는
 그 파일을 건드리지 않았다. ARK-10이 끝나면 `Marketplace` enum에 `esm_2_0`을
 추가하는 한 줄짜리 후속 작업이 필요하다(그 전까지는 ESM 2.0 커넥션을 실제 DB에
-동기화할 수 없음 — 어댑터/테스트는 로컬 JSON 스토어로 완전히 검증됨).
+동기화할 수 없음 — 어댑터/테스트는 로컬 JSON 스토어로 완전히 검증됨).~~
+
+**해결됨 (ARK-20):** ARK-10 커밋(e93d233)이 `Marketplace` enum에 `esm_2_0`을
+함께 포함시켜 머지되었다. 이 값은 아직 어떤 실 DB에도 적용된 적 없는 최초
+마이그레이션(`20260701000000_init_domain_model`)의 `CREATE TYPE` 문에 이미
+들어 있으므로, 별도의 ALTER TYPE 마이그레이션은 필요 없다. `npm run typecheck`
+통과 확인됨. 남은 블로커는 여전히 위 1~4번(CEO의 ESM PLUS 계정/자격증명)뿐이다.
 
 ```
 unblock owner: CEO  |  action: ESM PLUS 마스터 계정 등록 + 오픈API 발급 + 시크릿 전달
