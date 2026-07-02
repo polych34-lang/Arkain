@@ -86,10 +86,8 @@ export class CoupangAdapter implements MarketplaceAdapter {
     private readonly deps: CoupangHttpDeps = {},
   ) {}
 
-  private clientFor(cred: SellerCredential): {
-    http: CoupangHttpClient;
-    vendorId: string;
-  } {
+  /** Builds the transport for a seller (same shape as Naver/ESM's `clientFor`). */
+  private clientFor(cred: SellerCredential): CoupangHttpClient {
     const coupangCred: CoupangCredential = {
       vendorId: cred.secret.vendorId ?? "",
       accessKey: cred.secret.accessKey ?? "",
@@ -101,10 +99,7 @@ export class CoupangAdapter implements MarketplaceAdapter {
         { marketplace: this.id, retryable: false },
       );
     }
-    return {
-      http: new CoupangHttpClient(this.config, coupangCred, this.deps),
-      vendorId: coupangCred.vendorId,
-    };
+    return new CoupangHttpClient(this.config, coupangCred, this.deps);
   }
 
   private now(): number {
@@ -113,7 +108,8 @@ export class CoupangAdapter implements MarketplaceAdapter {
 
   async verifyCredential(cred: SellerCredential): Promise<boolean> {
     try {
-      const { http, vendorId } = this.clientFor(cred);
+      const http = this.clientFor(cred);
+      const vendorId = cred.secret.vendorId!;
       await http.request({
         method: "GET",
         path: `/v2/providers/seller_api/apis/api/v1/marketplace/seller-products`,
@@ -130,7 +126,8 @@ export class CoupangAdapter implements MarketplaceAdapter {
     cred: SellerCredential,
     params: FetchOrdersParams,
   ): Promise<FetchOrdersPage> {
-    const { http, vendorId } = this.clientFor(cred);
+    const http = this.clientFor(cred);
+    const vendorId = cred.secret.vendorId!;
     const state =
       decodeCursor<OrderCursor>(params.cursor) ??
       ({ statusIdx: 0, from: params.since.toISOString() } as OrderCursor);
@@ -172,7 +169,8 @@ export class CoupangAdapter implements MarketplaceAdapter {
     cred: SellerCredential,
     params: FetchProductsParams,
   ): Promise<FetchProductsPage> {
-    const { http, vendorId } = this.clientFor(cred);
+    const http = this.clientFor(cred);
+    const vendorId = cred.secret.vendorId!;
     const cursorState = decodeCursor<{ nextToken?: string }>(params.cursor);
     const nextToken = cursorState?.nextToken;
     const pageSize = params.pageSize ?? PRODUCT_PAGE_SIZE;
