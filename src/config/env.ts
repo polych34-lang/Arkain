@@ -73,6 +73,11 @@ const EnvSchema = z.object({
   COUPANG_ACCESS_KEY: z.string().optional(),
   COUPANG_SECRET_KEY: z.string().optional(),
   COUPANG_PULL_SINCE_DAYS: z.coerce.number().int().positive().default(14),
+
+  // ARK-28: Slack-compatible incoming webhook for ops alerts (sync failure,
+  // marketplace rate-limiting, settlement mismatch). Optional — unset means
+  // log-only alerting (the default in dev/test/CI). See src/alerting/notifier.ts.
+  ALERT_WEBHOOK_URL: z.string().url().optional(),
 });
 
 export type AppConfig = z.infer<typeof EnvSchema>;
@@ -124,5 +129,6 @@ export function redactedConfig(cfg: AppConfig): Record<string, unknown> {
     COUPANG_ACCESS_KEY: mask(cfg.COUPANG_ACCESS_KEY),
     COUPANG_SECRET_KEY: mask(cfg.COUPANG_SECRET_KEY),
     COUPANG_PULL_SINCE_DAYS: cfg.COUPANG_PULL_SINCE_DAYS,
+    ALERT_WEBHOOK_URL: mask(cfg.ALERT_WEBHOOK_URL),
   };
 }

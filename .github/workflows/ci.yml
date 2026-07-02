@@ -2,7 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # ARK-28: the repo's default branch is `master`, not `main` — this
+    # trigger never fired before. See docs/deployment.md.
+    branches: [master]
   pull_request:
 
 jobs:
@@ -44,3 +46,18 @@ jobs:
             exit 1
           fi
           echo "No tracked .env files. OK."
+
+  # ARK-28: sanity-check the production image builds on every PR, without
+  # pushing anywhere. The real build+push (used for deploys) is
+  # .github/workflows/deploy.yml, gated to master.
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build image (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          tags: arkain:ci-check
