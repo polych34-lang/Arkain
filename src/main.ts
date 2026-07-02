@@ -6,6 +6,7 @@ import { PrismaDomainStore } from "./domain/repository.js";
 import { B2BStore } from "./domain/b2b/repository.js";
 import { NaverSmartstoreAdapter } from "./integrations/naver/naver.adapter.js";
 import { EsmAdapter } from "./integrations/esm/esm.adapter.js";
+import { CoupangAdapter } from "./integrations/coupang/coupang.adapter.js";
 import type { MarketplaceAdapter, MarketplaceId } from "./integrations/marketplace.js";
 import { createLogger } from "./logging/logger.js";
 import { EnvelopeCredentialStore } from "./secrets/credentialStore.js";
@@ -45,6 +46,9 @@ function buildSyncDeps(
     // this is always safe to register — a connection simply can't be synced
     // until its per-seller credential is stored via CredentialStore.
     esm_2_0: new EsmAdapter({ baseUrl: config.ESM_API_BASE_URL }),
+    // Coupang (ARK-27): same no-app-level-key shape as ESM (per-seller
+    // vendorId/accessKey/secretKey only).
+    coupang: new CoupangAdapter({ baseUrl: config.COUPANG_API_BASE_URL }),
   };
 
   const engine = new OrderSyncEngine(adapters, store, {

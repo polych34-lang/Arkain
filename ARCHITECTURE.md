@@ -149,6 +149,22 @@ which was concurrently migrating that same file for tenant_id/RLS) — a real
 ESM 2.0 connection cannot be persisted via `PrismaDomainStore` until that
 one-line addition lands.
 
+`CoupangAdapter` (ARK-27, 쿠팡 Wing/Open API) is the **third** real
+implementation, and the one this program's second target market has always
+pointed at. Same result as ESM: zero changes to the sync engine, domain model,
+`MarketplaceAdapter` contract, or `retry.ts` — `coupang: new CoupangAdapter(...)`
+is one line in `main.ts`'s adapter map, and `"coupang"` was already reserved in
+`MarketplaceId` and the Prisma `Marketplace` enum. Per-request HMAC auth (`CEA
+algorithm=HmacSHA256, ...`, same "no token round trip" shape as ESM's JWT), order
+pull loops {status × time-window × cursor} since the 발주서 list endpoint takes
+exactly one `status` per call (no documented "all statuses" mode — the same open
+question ESM's status loop hit), product pull is a single cursor-paged call. Like
+ESM, and unlike Naver, there is no ARKAIN app-level shared key — `vendorId` /
+`accessKey` / `secretKey` are issued directly to each seller from WING. Same
+confidence tier as ESM: the wire format is transcribed from the public Coupang
+Open API reference, not a live vendor account (no Coupang WING credentials exist
+yet). Live verification gated on CEO sign-off — see `docs/coupang-integration.md`.
+
 ## 6. Correctness conventions (non-negotiable)
 
 - **Money = integer KRW (minor units).** No floats for money, anywhere.

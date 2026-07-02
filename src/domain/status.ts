@@ -84,12 +84,39 @@ const ESM_PRODUCT_STATUS: Record<string, UnifiedProductStatus> = {
   "31": "OUT_OF_STOCK",
 };
 
+/**
+ * Coupang Wing/Open API 발주서 `status` -> unified. Values per the public
+ * Coupang Open API reference, confirmed via docs but NOT against a live
+ * vendor account (ARK-27 credential caveat — see docs/coupang-integration.md
+ * §6). `CANCEL`/`RETURN` states are handled by separate Coupang endpoints not
+ * yet pulled by this adapter, so they have no entry here.
+ */
+const COUPANG_ORDER_STATUS: Record<string, UnifiedOrderStatus> = {
+  ACCEPT: "PAID", // 결제완료
+  INSTRUCT: "PAID", // 상품준비중
+  DEPARTURE: "DISPATCHED", // 배송지시
+  DELIVERING: "DISPATCHED", // 배송중
+  FINAL_DELIVERY: "DELIVERED", // 배송완료
+  NONE_TRACKING: "DELIVERED", // 업체배송(추적 불가)
+};
+
+/**
+ * Coupang `saleStatusName` (seller-products item) -> unified. Same live-data
+ * caveat as above.
+ */
+const COUPANG_PRODUCT_STATUS: Record<string, UnifiedProductStatus> = {
+  ON_SALE: "ON_SALE",
+  OUT_OF_STOCK: "OUT_OF_STOCK",
+  SUSPENSION: "SUSPENDED",
+  DELETING: "SUSPENDED",
+};
+
 const ORDER_STATUS_BY_MARKETPLACE: Record<
   MarketplaceId,
   Record<string, UnifiedOrderStatus> | undefined
 > = {
   naver_smartstore: NAVER_ORDER_STATUS,
-  coupang: undefined,
+  coupang: COUPANG_ORDER_STATUS,
   eleven_st: undefined,
   esm_2_0: ESM_ORDER_STATUS,
 };
@@ -99,7 +126,7 @@ const PRODUCT_STATUS_BY_MARKETPLACE: Record<
   Record<string, UnifiedProductStatus> | undefined
 > = {
   naver_smartstore: NAVER_PRODUCT_STATUS,
-  coupang: undefined,
+  coupang: COUPANG_PRODUCT_STATUS,
   eleven_st: undefined,
   esm_2_0: ESM_PRODUCT_STATUS,
 };

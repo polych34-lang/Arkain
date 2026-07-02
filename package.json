@@ -15,6 +15,7 @@
     "test": "vitest run",
     "naver:pull": "tsx src/scripts/naver-pull.ts",
     "esm:pull": "tsx src/scripts/esm-pull.ts",
+    "coupang:pull": "tsx src/scripts/coupang-pull.ts",
     "seed:demo": "tsx src/scripts/seed-demo-orders.ts",
     "lint": "tsc -p tsconfig.json --noEmit",
     "db:generate": "prisma generate",

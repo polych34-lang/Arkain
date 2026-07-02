@@ -62,6 +62,17 @@ const EnvSchema = z.object({
   ESM_AUCTION_SELLER_ID: z.string().optional(),
   ESM_GMARKET_SELLER_ID: z.string().optional(),
   ESM_PULL_SINCE_DAYS: z.coerce.number().int().positive().default(14),
+
+  // 쿠팡 Wing/Open API (ARK-27). Like ESM, no app-level shared key — every
+  // field below is per-seller (accessKey/secretKey/vendorId issued directly
+  // by Coupang WING > 오픈API 관리). Exists only to drive the `coupang:pull`
+  // scratch/dev CLI; real per-seller credentials go through CredentialStore,
+  // never env, in prod.
+  COUPANG_API_BASE_URL: z.string().url().default("https://api-gateway.coupang.com"),
+  COUPANG_VENDOR_ID: z.string().optional(),
+  COUPANG_ACCESS_KEY: z.string().optional(),
+  COUPANG_SECRET_KEY: z.string().optional(),
+  COUPANG_PULL_SINCE_DAYS: z.coerce.number().int().positive().default(14),
 });
 
 export type AppConfig = z.infer<typeof EnvSchema>;
@@ -108,5 +119,10 @@ export function redactedConfig(cfg: AppConfig): Record<string, unknown> {
     ESM_AUCTION_SELLER_ID: mask(cfg.ESM_AUCTION_SELLER_ID),
     ESM_GMARKET_SELLER_ID: mask(cfg.ESM_GMARKET_SELLER_ID),
     ESM_PULL_SINCE_DAYS: cfg.ESM_PULL_SINCE_DAYS,
+    COUPANG_API_BASE_URL: cfg.COUPANG_API_BASE_URL,
+    COUPANG_VENDOR_ID: mask(cfg.COUPANG_VENDOR_ID),
+    COUPANG_ACCESS_KEY: mask(cfg.COUPANG_ACCESS_KEY),
+    COUPANG_SECRET_KEY: mask(cfg.COUPANG_SECRET_KEY),
+    COUPANG_PULL_SINCE_DAYS: cfg.COUPANG_PULL_SINCE_DAYS,
   };
 }
