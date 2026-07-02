@@ -1,5 +1,11 @@
 import { z } from "zod";
 
+// dotenv/the platform secret manager both represent "unset" as an empty
+// string for a blank `KEY=` line — treat that the same as absent so an
+// optional url field doesn't fail validation just because it's blank.
+const emptyToUndefined = (v: unknown) => (v === "" ? undefined : v);
+const optionalUrl = () => z.preprocess(emptyToUndefined, z.string().url().optional());
+
 /**
  * Central, validated configuration. Nothing in the app reads `process.env`
  * directly — everything goes through `loadEnv()` so that a missing or malformed
@@ -18,7 +24,7 @@ const EnvSchema = z.object({
 
   // Optional at boot so the skeleton runs without a DB; required once
   // persistence is wired in (ENG-Domain-Model / ENG-Orders-MVP).
-  DATABASE_URL: z.string().url().optional(),
+  DATABASE_URL: optionalUrl(),
 
   // Credential encryption key (base64, 32 bytes). Optional at boot; required
   // before any seller marketplace credential is stored.
@@ -44,7 +50,7 @@ const EnvSchema = z.object({
   // SellerDesk's own solution-provider registration with Naver is approved
   // (business/legal step, tracked outside this codebase) — the onboarding UI
   // falls back to manual account-id entry rather than fabricating a URL.
-  NAVER_SELLER_CONSENT_URL: z.string().url().optional(),
+  NAVER_SELLER_CONSENT_URL: optionalUrl(),
 
   // ENG-Orders-MVP (ARK-5): in-process poll interval for the order-sync
   // scheduler. Default 5 minutes. Only takes effect when DATABASE_URL and
@@ -77,7 +83,7 @@ const EnvSchema = z.object({
   // ARK-28: Slack-compatible incoming webhook for ops alerts (sync failure,
   // marketplace rate-limiting, settlement mismatch). Optional — unset means
   // log-only alerting (the default in dev/test/CI). See src/alerting/notifier.ts.
-  ALERT_WEBHOOK_URL: z.string().url().optional(),
+  ALERT_WEBHOOK_URL: optionalUrl(),
 });
 
 export type AppConfig = z.infer<typeof EnvSchema>;
