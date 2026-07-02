@@ -48,13 +48,16 @@ src/
   main.ts                     Process entrypoint + graceful shutdown
   config/env.ts               Validated config (zod); single source of env truth
   logging/logger.ts           pino structured logging with secret redaction
+  alerting/notifier.ts        Ops alerting: sync failure / rate limit / settlement mismatch
   integrations/
     marketplace.ts            MarketplaceAdapter contract + normalized types
     naver/naver.adapter.ts    네이버 스마트스토어 adapter (stub → ENG-Naver-Spike)
   secrets/credentialStore.ts  AES-256-GCM envelope encryption for seller creds
 prisma/schema.prisma          Foundation schema (Seller, Connection, SyncRun)
 test/                         Vitest tests
-.github/workflows/ci.yml      CI: typecheck, build, test, secret-scan
+Dockerfile, fly.*.toml        Production image + Fly.io staging/production config
+.github/workflows/ci.yml      CI: typecheck, build, test, secret-scan, docker-build
+.github/workflows/deploy.yml  Deploy: build+push image, migrate, flyctl deploy
 ```
 
 ## Secrets
@@ -63,3 +66,10 @@ No real seller credentials in the repo, ever. Local dev uses `.env`
 (git-ignored); staging/prod inject secrets from the platform secret manager.
 Seller marketplace credentials are envelope-encrypted before persistence. See
 `ARCHITECTURE.md` → "Secrets & credentials".
+
+## Deployment
+
+See `docs/deployment.md` for the staging/production runbook and
+`docs/adr/0004-deployment-secrets-alerting-baseline.md` for the rationale.
+Not live yet — pipeline is implemented but gated on a Git remote + hosting
+account (CEO action, see that doc).

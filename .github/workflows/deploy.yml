@@ -1,0 +1,112 @@
+name: Deploy
+
+# ARK-28: real deploy stage on top of the CI baseline (ci.yml). Two gated
+# targets:
+#   - staging: auto-deploys on every push to master, once CI is green.
+#   - production: manual only (workflow_dispatch), and additionally gated by
+#     the "production" GitHub Environment's required-reviewer protection
+#     rule (configured in repo Settings — not expressible in this file).
+#
+# Requires repo/environment secrets that do not exist yet in a fresh repo —
+# see docs/deployment.md "Required secrets" before this can run for real.
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Environment to deploy"
+        required: true
+        default: staging
+        type: choice
+        options: [staging, production]
+
+concurrency:
+  group: deploy-${{ github.event.inputs.target || 'staging' }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ghcr.io/${{ github.repository }}:${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          # GITHUB_TOKEN is auto-issued per run, scoped to this repo — no
+          # manual secret needed for the registry push.
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}:${{ github.sha }}
+            ghcr.io/${{ github.repository }}:latest
+
+  deploy-staging:
+    needs: build-and-push
+    if: github.event_name == 'push' || github.event.inputs.target == 'staging'
+    runs-on: ubuntu-latest
+    environment:
+      name: staging
+      url: https://arkain-staging.fly.dev
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+      - run: npm ci
+
+      # Release step: apply pending migrations BEFORE the new image goes
+      # live, same DB the new image will connect to.
+      - name: Run pending migrations
+        run: npm run db:deploy
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - name: Deploy to Fly.io (staging)
+        run: flyctl deploy -c fly.staging.toml --image ${{ needs.build-and-push.outputs.image }} --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+  deploy-production:
+    needs: build-and-push
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.target == 'production'
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: https://arkain-production.fly.dev
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+      - run: npm ci
+
+      - name: Run pending migrations
+        run: npm run db:deploy
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - name: Deploy to Fly.io (production)
+        run: flyctl deploy -c fly.production.toml --image ${{ needs.build-and-push.outputs.image }} --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

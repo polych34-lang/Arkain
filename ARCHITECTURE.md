@@ -21,6 +21,11 @@ Subsequent ADRs append to `docs/adr/`.
   API (adapter-shaped); GS샵's current partner portal looks Excel-download-based,
   not an adapter fit. Channel priority and whether to build an Excel-import path
   are CEO decisions, not yet made.
+- **ADR-0004** (`docs/adr/0004-deployment-secrets-alerting-baseline.md`, ARK-28):
+  deploy stage on top of the CI baseline (§8) — Docker image, Fly.io staging/
+  production (recommended, not yet provisioned), GitHub Environment-scoped
+  secrets, and a baseline ops alerting module (sync failure / rate limit /
+  settlement mismatch). See `docs/deployment.md` for the runbook.
 
 ---
 
@@ -186,12 +191,29 @@ CEO sign-off): move the data key to a managed KMS, add a dedicated secret scanne
 ## 8. CI / environments / observability baseline
 
 - **CI** (`.github/workflows/ci.yml`): `npm ci` → `prisma generate` → typecheck →
-  build → test, plus a `secret-scan` job that blocks committed `.env` files.
+  build → test, plus a `secret-scan` job that blocks committed `.env` files and
+  a `docker-build` sanity job. Trigger fixed to the repo's actual default
+  branch (`master`, was `main` — never fired before ARK-28).
+- **Deploy** (`.github/workflows/deploy.yml`, ARK-28 / ADR-0004): build once,
+  push to GHCR, `prisma migrate deploy` against the target DB, then `flyctl
+  deploy` that exact image. `staging` auto-deploys on push to `master`;
+  `production` is `workflow_dispatch`-only plus a required-reviewer gate. Not
+  live yet — needs a Git remote + Fly.io account, see `docs/deployment.md`.
 - **Environments:** `development` (local), `test` (CI/vitest), `staging`,
   `production` — selected by `NODE_ENV`, all config validated by zod at boot so a
   missing/bad var fails loudly instead of corrupting data later.
+- **Secrets:** local `.env` unchanged for dev. Staging/prod app secrets live in
+  Fly.io's per-app secret store (`flyctl secrets set`), not in GitHub Actions or
+  the image; CI/CD's own two secrets (`DATABASE_URL`, `FLY_API_TOKEN`) are
+  GitHub Environment-scoped (staging vs. production isolated). See ADR-0004 §4.
 - **Logging:** pino JSON with redaction; request logging via Fastify. Metrics/
   tracing deferred until there's traffic to observe.
+- **Alerting** (ARK-28 / ADR-0004 §5): `src/alerting/notifier.ts` — Slack-
+  compatible webhook (`ALERT_WEBHOOK_URL`, optional; log-only when unset) for
+  `sync_failure` (wired to `OrderSyncEngine.onError`) and `rate_limit` (wired
+  through the shared retry policy, throttled per marketplace).
+  `settlement_mismatch` category exists, no detection logic yet (no settlement
+  adapter).
 - **Health:** `/health` liveness today; readiness checks (DB, marketplace
   reachability) added alongside those subsystems.
 
@@ -236,6 +258,12 @@ the roadmap below — deliberately, to keep the MVP path short.
    one human step (SellerDesk's Naver solution-provider registration) before
    the real consent deep link can be filled in. See
    `docs/naver-seller-selfservice.md`.
+10. **Deployment baseline (ARK-28)** — ✅ Dockerfile, staging/production Fly.io
+    config, deploy pipeline, environment-scoped secrets design, and the
+    sync-failure/rate-limit alerting baseline implemented and tested. Gated on
+    CEO approval before it runs for real: no Git remote exists yet (CI has
+    never executed) and no hosting account is provisioned. See ADR-0004 and
+    `docs/deployment.md`.
 
 ## 11. One-way vs two-way doors
 

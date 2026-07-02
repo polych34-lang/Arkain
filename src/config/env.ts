@@ -62,6 +62,11 @@ const EnvSchema = z.object({
   ESM_AUCTION_SELLER_ID: z.string().optional(),
   ESM_GMARKET_SELLER_ID: z.string().optional(),
   ESM_PULL_SINCE_DAYS: z.coerce.number().int().positive().default(14),
+
+  // ARK-28: Slack-compatible incoming webhook for ops alerts (sync failure,
+  // marketplace rate-limiting, settlement mismatch). Optional — unset means
+  // log-only alerting (the default in dev/test/CI). See src/alerting/notifier.ts.
+  ALERT_WEBHOOK_URL: z.string().url().optional(),
 });
 
 export type AppConfig = z.infer<typeof EnvSchema>;
@@ -108,5 +113,6 @@ export function redactedConfig(cfg: AppConfig): Record<string, unknown> {
     ESM_AUCTION_SELLER_ID: mask(cfg.ESM_AUCTION_SELLER_ID),
     ESM_GMARKET_SELLER_ID: mask(cfg.ESM_GMARKET_SELLER_ID),
     ESM_PULL_SINCE_DAYS: cfg.ESM_PULL_SINCE_DAYS,
+    ALERT_WEBHOOK_URL: mask(cfg.ALERT_WEBHOOK_URL),
   };
 }
