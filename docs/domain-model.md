@@ -10,6 +10,9 @@ mechanical next steps, not open design questions.
 `docs/multi-tenancy.md`. The idempotent keys below are unchanged in shape
 but now scoped per tenant first.
 
+**ARK-35 update:** `Customer` is a new entity — see "Customer identity
+(ARK-35)" below. `Order` gained a nullable `customerId` FK to it.
+
 ## What this is
 
 The second half of the pipeline that starts with the ARK-3 adapter:
@@ -74,6 +77,51 @@ and is preserved unchanged into the unified status.
 - Raw payload preserved (`raw: Json`) on every Order/Product row for audit
   when a number looks wrong.
 
+## Customer identity (ARK-35)
+
+Per `feature-audit` §2.3/§5 (ARK-32): the reference OMS has no `customers`
+table — customer identity is two free-text phone columns
+(`naver_inquiries.customer_name/phone`, `orders.customer_name/phone`)
+compared as strings, so repurchase/LTV/a 360-degree customer view is
+structurally impossible there. This adds `Customer` before any feature writes
+to it, so nothing downstream retrofits a merge key later.
+
+- **`Customer`** — one row per (tenant, normalized phone number). Reuses the
+  ARK-10 tenant boundary (`Seller`) and its exact RLS pattern (`ENABLE`/
+  `FORCE ROW LEVEL SECURITY` + `tenant_isolation` policy keyed on
+  `current_setting('app.tenant_id', true)`) — see `docs/multi-tenancy.md`.
+  `primaryPhone` is meant to be digits-only (hyphens/whitespace stripped)
+  before insert; there is no writer yet to enforce that in code (see below).
+  `channelIds` (jsonb) holds per-channel identifiers (e.g. `{"naver":
+  ["Q123", "T_xxx"]}`) so a future CS view can resolve a channel inquiry id
+  back to this row.
+- **`Order.customerId`** — nullable FK to `Customer`. Nullable because no
+  phone-matching service exists yet; every existing and newly-synced order
+  starts unlinked.
+- **`customer_activity` VIEW** (in the migration, not in Prisma — Prisma has
+  no first-class view support) — unifies 문의(inquiry) + 주문(order) +
+  견적(quote) into one timeline per customer, per the issue's explicit ask.
+  Only `Order` exists today; `Inquiry`/`Quote` don't exist as tables yet (no
+  CS/quote feature has been built), so the view has one `UNION ALL` arm and
+  is written so each future entity adds one more arm without touching this
+  one. Not consumed by any app code yet — the first CS/quote issue that needs
+  a timeline is the intended consumer.
+
+| File | Role |
+| --- | --- |
+| `prisma/schema.prisma` | `Customer` model + `Order.customerId` |
+| `prisma/migrations/20260703000000_customers_activity_view/` | Table, FK, RLS policy, `customer_activity` VIEW |
+
+**Verified:** migration applied cleanly against `@electric-sql/pglite`
+(same method as ARK-10 — see "Sandbox verification" in
+`docs/multi-tenancy.md`), plus a functional check confirming: the
+`(tenantId, primaryPhone)` unique constraint rejects a duplicate, the
+`Order.customerId` FK rejects a bogus id, an `Order` with no `customerId`
+still inserts (the common unmatched case), and `customer_activity` returns
+the expected joined row. RLS *enforcement* itself has the same unverified
+status as ARK-10 (needs a live Postgres, non-superuser role — see
+`docs/multi-tenancy.md`).
+
 ## Deliberately not done here
 
 - **No live DB exercise.** `prisma validate` and `prisma generate` pass; an
@@ -84,3 +132,7 @@ and is preserved unchanged into the unified status.
   `./data/naver/*.json`. It's a spike/debug tool, not the sync engine;
   `PrismaDomainStore` is what ARK-5's order-sync engine will use.
 - **No settlement mapper** — see Settlement above.
+- **No customer-matching service** — nothing normalizes a raw phone number or
+  upserts/links a `Customer` yet (ARK-35 is schema + FK only, per its stated
+  scope). That lands with whichever CS/견적 issue first needs to write to
+  `Customer`/`Order.customerId`.

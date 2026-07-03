@@ -280,6 +280,13 @@ the roadmap below — deliberately, to keep the MVP path short.
     CEO approval before it runs for real: no Git remote exists yet (CI has
     never executed) and no hosting account is provisioned. See ADR-0004 and
     `docs/deployment.md`.
+11. **Customer identity (ARK-35)** — ✅ `customers` table + `Order.customerId`
+    FK, reusing ARK-10's `tenant_id`/RLS pattern verbatim, plus a
+    `customer_activity` VIEW prepared for the future CS/견적 (Quote/Inquiry)
+    issues that will populate it. Migration SQL verified against a real
+    Postgres-compatible engine (DDL, unique/FK constraints, and the view's
+    JOIN all behave as expected). No app-layer writer yet — see
+    `docs/domain-model.md`.
 
 ## 11. One-way vs two-way doors
 

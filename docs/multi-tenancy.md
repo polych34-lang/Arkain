@@ -159,6 +159,15 @@ mismatched `sellerId`/`marketplace` now fails auth-tag verification (throws)
 instead of returning the wrong seller's secret. See
 `test/credentialStore.test.ts`.
 
+## Reused by ARK-35 (`Customer`)
+
+`Customer` (`prisma/migrations/20260703000000_customers_activity_view`)
+reuses this exact pattern — `ENABLE`/`FORCE ROW LEVEL SECURITY`, the same
+`tenant_isolation` policy shape, the same `arkain_app` grant — rather than
+inventing a second one. See `docs/domain-model.md` "Customer identity
+(ARK-35)" for what's new there (the table itself, `Order.customerId`, and the
+`customer_activity` VIEW).
+
 ## What's still missing (explicitly out of scope for this issue)
 
 - **No HTTP-level tenant auth.** `/api/orders` and the dashboard have no

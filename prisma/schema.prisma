@@ -39,6 +39,7 @@ model Seller {
   accounts                Account[]
   accountPriceListEntries AccountPriceListEntry[]
   purchaseOrders          PurchaseOrder[]
+  customers               Customer[]
 }
 
 /// A seller's link to one marketplace. The credential is stored ENCRYPTED
@@ -112,13 +113,19 @@ enum ProductStatus {
 /// marketplaceOrderId), matching the local JSON store's key from the ARK-3
 /// spike so re-running a sync never double-counts.
 model Order {
-  id                 String      @id @default(uuid())
+  id                 String       @id @default(uuid())
   /// ARK-10 (ADR-0002 §2b): tenant boundary (-> Seller.id). Required — every
   /// write path (OrderSyncEngine) sets it, there's no pre-migration data to
   /// backfill (no migration has ever run against a live DB — see
   /// docs/multi-tenancy.md). Enforced again at the DB layer by Postgres RLS.
-  tenant             Seller      @relation(fields: [tenantId], references: [id])
+  tenant             Seller       @relation(fields: [tenantId], references: [id])
   tenantId           String
+  /// ARK-35: which customer placed this order, once phone-matched against
+  /// `customers`. Nullable — no matching service exists yet (that lands with
+  /// the CS/견적 issue that consumes `customer_activity`); every existing and
+  /// newly-synced Order starts unlinked.
+  customer           Customer?    @relation(fields: [customerId], references: [id])
+  customerId         String?
   marketplace        Marketplace
   marketplaceOrderId String
   status             OrderStatus
@@ -206,6 +213,44 @@ model Settlement {
   updatedAt          DateTime    @updatedAt
 
   @@index([tenantId, marketplace, marketplaceOrderId])
+}
+
+// --- Customer identity (ARK-35, per feature-audit §2.3/§5) ------------------
+//
+// The reference OMS has no `customers` table at all — customer identity is
+// two free-text phone columns compared as strings across `naver_inquiries`
+// and `orders`, which makes repurchase/LTV/a 360-degree customer view
+// structurally impossible. Building this table now, before any CS/quote
+// feature exists to write to it, is the late-mover advantage: everything
+// downstream (Quote, Inquiry, when those land) links to `Customer` from day
+// one instead of retrofitting a merge key later.
+
+/// One customer, identified by normalized phone number within a tenant. Reuses
+/// the ARK-10 tenant boundary (`Seller`) and RLS pattern verbatim — see
+/// prisma/migrations/20260703000000_customers_activity_view and
+/// docs/multi-tenancy.md.
+model Customer {
+  id              String    @id @default(uuid())
+  tenant          Seller    @relation(fields: [tenantId], references: [id])
+  tenantId        String
+  /// Digits only (hyphens/whitespace stripped) — the merge key across
+  /// channels. Normalization happens at the write path once one exists (no
+  /// writer yet — see the Order.customerId comment); the column itself is the
+  /// durable invariant.
+  primaryPhone    String
+  primaryEmail    String?
+  name            String
+  /// e.g. {"naver": ["Q123", "T_xxx"]} — per-channel identifiers this
+  /// customer is known by, so a future CS view can jump from a channel
+  /// inquiry id back to this row without a second lookup table.
+  channelIds      Json?
+  firstInquiryAt  DateTime?
+  lastContactedAt DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  orders          Order[]
+
+  @@unique([tenantId, primaryPhone])
 }
 
 // --- B2B module: 거래처(Account) + 대량발주(PurchaseOrder) (ARK-16) ---------
