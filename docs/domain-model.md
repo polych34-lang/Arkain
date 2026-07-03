@@ -122,6 +122,63 @@ the expected joined row. RLS *enforcement* itself has the same unverified
 status as ARK-10 (needs a live Postgres, non-superuser role — see
 `docs/multi-tenancy.md`).
 
+## Pricing / Quote module (ARK-36 design, ARK-42 implementation)
+
+Per `feature-audit` §2.2 (ARK-32): the reference OMS has a 3-tier price
+master (`cost_pricing` -> `price_segments`(업종) -> `model_seg_discounts`)
+but its actual calculation rules (`wholesaleFactor`, `d10/d20/d30Factor`,
+`roundUnit`, color surcharges) live in a single tenant-wide `localStorage`
+blob — a deployed multi-tenant product can't let one 업종's discount
+structure differ from another's with that design. This DB-izes those rules,
+tenant+segment scoped, and adds `Quote`/`QuoteItem` with a `unit_price`
+snapshot so a later rule change can never retroactively alter a past quote's
+amount (the reference's other defect this closes — see `QuoteItem` below).
+
+- **`PriceSegment`** — 업종 segment master, entirely tenant-defined (no seed
+  list — see "Deliberately not done here").
+- **`PricingRule`** — one row per `(tenantId, segmentId)`: `wholesaleFactor`,
+  `d10/d20/d30Factor`, `roundUnit`. Replaces the reference's single
+  `localStorage` `pricing_rules` blob.
+- **`ModelSegDiscount`** — `(tenantId, segmentId, modelName, priceType)` ->
+  `discountRate`. Tenant-scoped version of the reference's
+  `UNIQUE(model_name, segment_id, price_type)`. `modelName` stays a freeform
+  string, matching the reference — `Product` has no normalized model entity
+  yet.
+- **`ColorTaxonomy`** / **`ColorSurcharge`** — split in two: taxonomy (raw
+  color value -> normalized label) is tenant-scoped only, since a color name
+  doesn't change by 업종; surcharge amount is tenant+segment scoped, since
+  the same color can have a different 원가 by 업종.
+- **`Quote`** — `customerId` nullable for the same reason as
+  `Order.customerId` (ARK-35): no phone-matching service exists yet.
+  `convertedOrderId` is a structural hook only — Quote->Order conversion
+  logic (discount re-entry, inventory effects, etc.) is a separate issue.
+- **`QuoteItem`** — no own `tenantId`/RLS, same reasoning as `OrderItem`
+  (ADR-0002 §2b): always reached through its parent `Quote`. Its entire
+  purpose is the unit-price snapshot: every calculation input
+  (`basePriceKrw`, `discountRateSnapshot`, `colorSurchargeKrw`,
+  `roundUnitSnapshot`, plus `segmentCodeSnapshot` for when the referenced
+  segment is later deleted) is stored alongside the result
+  (`unitPriceKrw`/`lineTotalKrw`), which callers must read as-is and never
+  recompute.
+
+| File | Role |
+| --- | --- |
+| `prisma/schema.prisma` | `PriceSegment`/`PricingRule`/`ModelSegDiscount`/`ColorTaxonomy`/`ColorSurcharge`/`Quote`/`QuoteItem` models + `ModelSegPriceType`/`QuoteStatus` enums |
+| `prisma/migrations/20260703020000_quote_pricing_schema/` | Table/enum/FK DDL |
+| `prisma/migrations/20260703020001_quote_pricing_rls/` | RLS policies + `arkain_app` GRANT (ARK-10/ARK-35 pattern reused verbatim) |
+| `test/pricing-schema.test.ts` | Real Postgres RLS isolation tests (via in-process `@electric-sql/pglite`, not a fake client) + the unit-price snapshot invariant |
+
+**Verified:** all 6 migrations (init through the two new ARK-42 ones) apply
+cleanly in sequence against `@electric-sql/pglite`. Unlike ARK-10/ARK-35's
+"RLS enforcement not verified in sandbox" caveat, this issue's committed
+test suite verifies actual RLS *enforcement* (not just DDL syntax) — see
+"Correction (ARK-42)" in `docs/multi-tenancy.md` for how.
+
+**Scope explicitly excluded (per the ARK-36 design doc §5, restated in
+ARK-42):** the price-calculation logic (`calcAmounts`) itself, the
+`cost_pricing` master table, Quote->Order conversion logic, and any
+`PriceSegment` seed data — all separate issues.
+
 ## Deliberately not done here
 
 - **No live DB exercise.** `prisma validate` and `prisma generate` pass; an
