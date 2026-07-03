@@ -6,8 +6,11 @@ This doc is the operational how-to.
 ## Status
 
 **Staging is live**: https://arkain-staging.fly.dev — deploys automatically
-on every push to `master`. Production is provisioned but not yet deployed
-(manual, reviewed `workflow_dispatch` — see "Deploy" below).
+on every push to `master`. Demo login: `demo@arkain.dev` / `demo1234!`
+(seeded via `node dist/scripts/seed-demo-orders.js` over `fly ssh console`,
+since the production image has no `tsx`/`src` — see ARK-64). Production is
+provisioned but not yet deployed (manual, reviewed `workflow_dispatch` — see
+"Deploy" below).
 
 ## Local build/run (unchanged, still the fastest inner loop)
 
@@ -76,11 +79,18 @@ the schema doesn't support yet.
      human click.
 4. **Set the app-level runtime secrets** once per Fly app (not via GitHub —
    see ADR-0004 §4 for why). This now includes `DATABASE_URL`, since the
-   migration (`release_command`) runs on the Fly app itself, not in CI:
+   migration (`release_command`) runs on the Fly app itself, not in CI, and
+   `SESSION_SECRET` (ARK-57 login/signup — `main.ts`'s `buildSyncDeps` won't
+   wire up `auth`/`products` without `DATABASE_URL` **and**
+   `CREDENTIAL_ENC_KEY` **and** `SESSION_SECRET` all three set; staging ran
+   for a while with only `DATABASE_URL` set, which silently disabled
+   login/products/order-sync — check `fly secrets list -a <app>` has all
+   three before assuming a deploy is fully wired):
    ```bash
    fly secrets set -a arkain-staging \
      DATABASE_URL="postgres://postgres:<password>@arkain-staging-db.flycast:5432/postgres?sslmode=disable" \
      CREDENTIAL_ENC_KEY=$(openssl rand -base64 32) \
+     SESSION_SECRET=$(openssl rand -hex 32) \
      NAVER_COMMERCE_CLIENT_ID=... \
      NAVER_COMMERCE_CLIENT_SECRET=... \
      ALERT_WEBHOOK_URL=https://hooks.slack.com/services/...
@@ -95,6 +105,22 @@ the schema doesn't support yet.
 
 Once those four are done, `git push` to `master` deploys staging
 automatically; production is one manual, reviewed click away.
+
+## Seeding the demo account (ARK-57/ARK-64)
+
+The production image only ships `dist/` (compiled JS), not `src/` or `tsx`,
+so `npm run seed:demo` doesn't work as-is against a deployed app — run the
+compiled script instead, over `fly ssh console`:
+
+```bash
+fly ssh console -a arkain-staging -C "node dist/scripts/seed-demo-orders.js"
+```
+
+This seeds 5 demo orders and the demo login (`demo@arkain.dev` /
+`demo1234!`). Re-running is safe (idempotent on the demo tenant). It talks to
+`DATABASE_URL` directly, so it works even if `SESSION_SECRET` /
+`CREDENTIAL_ENC_KEY` aren't set yet — but login won't work until those are
+(see "Set the app-level runtime secrets" above).
 
 ## Alerting
 
