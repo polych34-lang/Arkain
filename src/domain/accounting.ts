@@ -35,7 +35,8 @@ export const CORE_LEDGER_ACCOUNTS: readonly CoreLedgerAccountSeed[] = [
   { code: "404", name: "제품매출", category: "REVENUE" },
 ];
 
-const LEDGER_CODE = {
+/** Exported so other modules (e.g. src/domain/northStar.ts) reference the same codes, never duplicate the magic strings. */
+export const LEDGER_CODE = {
   ACCOUNTS_RECEIVABLE: "108",
   SALES_REVENUE: "404",
   VAT_PAYABLE: "255",
