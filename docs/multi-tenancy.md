@@ -168,6 +168,19 @@ inventing a second one. See `docs/domain-model.md` "Customer identity
 (ARK-35)" for what's new there (the table itself, `Order.customerId`, and the
 `customer_activity` VIEW).
 
+## Reused by ARK-37 (`Inquiry`), plus one new pattern (`ChannelMessage`)
+
+`Inquiry` (`prisma/migrations/20260703020000_cs_channel_unification`) reuses
+the same RLS pattern again. `ChannelMessage` and `InquiryOrderLink` follow the
+`OrderItem` precedent instead (no own `tenantId`/RLS — reached only via their
+already-RLS'd parent `Inquiry`/`Order`), with the same residual gap accepted:
+a future direct/raw query against either table alone would not be
+tenant-filtered. `ChannelMessage` adds one new element to the pattern: its
+`arkain_app` grant is `SELECT, INSERT` only (no `UPDATE`/`DELETE`) to enforce
+append-only at the DB layer, not just app convention — see `docs/domain-model.md`
+"CS channel unification (ARK-37)" for why (the reference's v455 image-loss
+bug this closes).
+
 ## What's still missing (explicitly out of scope for this issue)
 
 - **No HTTP-level tenant auth.** `/api/orders` and the dashboard have no

@@ -13,6 +13,11 @@ but now scoped per tenant first.
 **ARK-35 update:** `Customer` is a new entity — see "Customer identity
 (ARK-35)" below. `Order` gained a nullable `customerId` FK to it.
 
+**ARK-37 update:** `Inquiry`/`ChannelMessage`/`InquiryOrderLink` are new
+entities — see "CS channel unification (ARK-37)" below. `Order` gained an
+`inquiryLinks` back-relation, `Product` gained an `inquiries` back-relation,
+and `customer_activity` gained its planned Inquiry `UNION ALL` arm.
+
 ## What this is
 
 The second half of the pipeline that starts with the ARK-3 adapter:
@@ -136,3 +141,86 @@ status as ARK-10 (needs a live Postgres, non-superuser role — see
   upserts/links a `Customer` yet (ARK-35 is schema + FK only, per its stated
   scope). That lands with whichever CS/견적 issue first needs to write to
   `Customer`/`Order.customerId`.
+
+## CS channel unification (ARK-37)
+
+Per `feature-audit` §2.3/§4 (ARK-32): the reference OMS unifies its 4 CS
+channels (상품문의/고객문의/톡톡/카카오) into one `naver_inquiries` table, with TalkTalk
+messages held in an append-only `channel_messages` table that a trigger rolls
+up into the parent row — the verified fix for the reference's v455 image-loss
+bug (§4's bug-pattern table): the old flow read the current content
+client-side, appended a message, and wrote it back, so two concurrent
+messages landing in that window could silently drop one image/message
+(read-modify-write race). This adopts that exact design.
+
+- **`Inquiry`** — one row per CS inquiry across all 4 channels. `channel`
+  (`PRODUCT_QNA`/`CUSTOMER_QNA`/`TALK`/`KAKAO`) replaces the reference's
+  inquiry-number-prefix convention with an explicit enum. The idempotent
+  upsert key is `(tenantId, channel, externalInquiryNo)` — **not**
+  `marketplace`, even though `Order`'s equivalent key uses it: `KAKAO` isn't
+  one of the `Marketplace` enum's storefronts (it's a messaging channel), so
+  `marketplace` is nullable and descriptive-only here. Postgres treats NULLs
+  as distinct in a unique index, so a NOT-NULL-`marketplace` key would have let
+  two `KAKAO` rows silently coexist under the same tenant/externalInquiryNo — a
+  latent gap this design avoids by keying on `channel` instead.
+  `customerId`/`productId` are nullable FKs (`Customer`/`Product`) for the same
+  reason as `Order.customerId`: no matching service exists yet, and
+  `customerName`/`customerPhone` are populated directly from the channel
+  payload at ingestion so the inquiry is usable before any match runs (same
+  reasoning as `Order.buyerName` next to its nullable `customerId`).
+- **`ChannelMessage`** — TALK/KAKAO conversation turns, **append-only**:
+  the migration grants `arkain_app` `SELECT, INSERT` only, no `UPDATE`/
+  `DELETE` — the actual fix for the v455 race, not just the trigger below. No
+  `tenantId` of its own, same reasoning as `OrderItem` (ADR-0002 §2b): only
+  ever reached via its parent `Inquiry` (already RLS'd). `attachments` (jsonb)
+  holds the image/file rehosting design the issue asked for: each entry is
+  `{originalUrl, rehostedUrl, rehostStatus, rehostedAt}`, matching the
+  reference's 6s-timeout-then-fallback-to-`originalUrl` behavior (CDN URLs
+  expire) — no rehosting worker exists yet (needs live Talk/Kakao credentials,
+  gated on ARK-22), this is the storage shape one would write to.
+- **`fn_channel_message_rollup`** (trigger, `AFTER INSERT ON "ChannelMessage"`)
+  — atomically appends `NEW.content` into the parent `Inquiry.content` in the
+  same transaction as the INSERT, so there is no read-then-write step for a
+  second concurrent insert to race. Only `PRODUCT_QNA`/`CUSTOMER_QNA` inquiries
+  set `content` directly at creation (single message, not conversational) —
+  those channels never get `ChannelMessage` children, so the trigger simply
+  never fires for them.
+- **`InquiryOrderLink`** — 문의↔주문 연결, composite PK (`inquiryId`, `orderId`)
+  supporting 1:N in both directions, per the issue's explicit ask (the
+  reference auto-matches `CUSTOMER_QNA` 1:1 via order context but needs a
+  manual link UI for `PRODUCT_QNA`/`TALK`, which can span multiple orders).
+  Mutable (`linkType` "auto"/"manual", full CRUD grant) unlike
+  `ChannelMessage` — a link can be corrected or removed.
+- **`customer_activity` VIEW** — gained the Inquiry `UNION ALL` arm the ARK-35
+  migration's comment said it was written for, with no other arm touched.
+
+| File | Role |
+| --- | --- |
+| `prisma/schema.prisma` | `Inquiry`/`ChannelMessage`/`InquiryOrderLink` models + `InquiryChannel`/`InquiryStatus`/`MessageDirection` enums |
+| `prisma/migrations/20260703020000_cs_channel_unification/` | Tables, FKs, RLS policy, append-only grants, `fn_channel_message_rollup` trigger, `customer_activity` VIEW's Inquiry arm |
+
+**Verified:** migration applied cleanly against `@electric-sql/pglite` (same
+method as ARK-10/ARK-35 — see "Sandbox verification" in
+`docs/multi-tenancy.md`), plus functional checks confirming: the
+`(tenantId, channel, externalInquiryNo)` unique constraint rejects a
+duplicate but allows the same `externalInquiryNo` across different channels;
+`customerId`/`productId`/`orderId` FKs reject bogus ids; the
+`fn_channel_message_rollup` trigger correctly appends two sequential
+`ChannelMessage` inserts into `Inquiry.content` in order; the
+`InquiryOrderLink` composite PK rejects a duplicate `(inquiryId, orderId)`
+pair; and `customer_activity` returns both Order and Inquiry rows for the same
+customer. RLS/role-grant *enforcement* (the append-only `GRANT` in
+particular) has the same unverified status as ARK-10/ARK-35 — pglite's
+role/session model doesn't reliably honor non-superuser role switching (see
+"Sandbox verification"); confirmed instead by static inspection that the
+migration's `GRANT` statement for `ChannelMessage` omits `UPDATE`/`DELETE`.
+
+### Deliberately not done here
+
+- **No rehosting worker.** `ChannelMessage.attachments` defines the storage
+  shape; nothing in this repo yet fetches a Naver CDN URL and re-uploads it
+  (would need live Talk/Kakao credentials, blocked on ARK-22).
+- **No customer/order matching for inquiries.** `Inquiry.customerId` and
+  `InquiryOrderLink` rows are never written by app code yet — same posture as
+  `Order.customerId` (ARK-35): schema/FK only, per this issue's stated scope.
+- **No CS inbox UI.** Schema only, per the issue title.

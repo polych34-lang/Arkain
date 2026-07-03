@@ -40,6 +40,7 @@ model Seller {
   accountPriceListEntries AccountPriceListEntry[]
   purchaseOrders          PurchaseOrder[]
   customers               Customer[]
+  inquiries               Inquiry[]
 }
 
 /// A seller's link to one marketplace. The credential is stored ENCRYPTED
@@ -113,18 +114,18 @@ enum ProductStatus {
 /// marketplaceOrderId), matching the local JSON store's key from the ARK-3
 /// spike so re-running a sync never double-counts.
 model Order {
-  id                 String       @id @default(uuid())
+  id                 String             @id @default(uuid())
   /// ARK-10 (ADR-0002 §2b): tenant boundary (-> Seller.id). Required — every
   /// write path (OrderSyncEngine) sets it, there's no pre-migration data to
   /// backfill (no migration has ever run against a live DB — see
   /// docs/multi-tenancy.md). Enforced again at the DB layer by Postgres RLS.
-  tenant             Seller       @relation(fields: [tenantId], references: [id])
+  tenant             Seller             @relation(fields: [tenantId], references: [id])
   tenantId           String
   /// ARK-35: which customer placed this order, once phone-matched against
   /// `customers`. Nullable — no matching service exists yet (that lands with
   /// the CS/견적 issue that consumes `customer_activity`); every existing and
   /// newly-synced Order starts unlinked.
-  customer           Customer?    @relation(fields: [customerId], references: [id])
+  customer           Customer?          @relation(fields: [customerId], references: [id])
   customerId         String?
   marketplace        Marketplace
   marketplaceOrderId String
@@ -138,11 +139,13 @@ model Order {
   totalAmountKrw     Int
   items              OrderItem[]
   settlements        Settlement[]
+  /// ARK-37: manual/auto links to CS inquiries concerning this order.
+  inquiryLinks       InquiryOrderLink[]
   /// Untouched normalized-order payload (which itself retains the marketplace
   /// raw response) — see ARCHITECTURE.md §6 "every number must be traceable".
   raw                Json
-  createdAt          DateTime     @default(now())
-  updatedAt          DateTime     @updatedAt
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
 
   /// Scoped per tenant so two sellers can never collide on the same
   /// marketplace order id (the ARK-10 bug this migration fixes — the prior
@@ -187,6 +190,7 @@ model Product {
   raw                  Json
   createdAt            DateTime      @default(now())
   updatedAt            DateTime      @updatedAt
+  inquiries            Inquiry[]
 
   @@unique([tenantId, marketplace, marketplaceProductId])
 }
@@ -249,8 +253,153 @@ model Customer {
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
   orders          Order[]
+  inquiries       Inquiry[]
 
   @@unique([tenantId, primaryPhone])
+}
+
+// --- CS channel unification (ARK-37, per feature-audit §2.3/§4) ------------
+//
+// The reference OMS unifies its 4 CS channels (상품문의/고객문의/톡톡/카카오) into one
+// `naver_inquiries` table, with TalkTalk/Kakao's conversational messages held in
+// an append-only `channel_messages` table that a DB trigger rolls up into the
+// parent row. That append-only design is the verified fix for the reference's
+// v455 image-loss bug (feature-audit §4): the old flow read the current
+// content, appended a message client-side, and wrote it back — two concurrent
+// messages landing in that window silently dropped one image/message
+// (read-modify-write race). Making the message log INSERT-only and letting a
+// trigger do the append inside the same transaction as the INSERT removes the
+// race by construction — there's no read-then-write step for two writers to
+// interleave. Adopted verbatim, per the issue's explicit instruction.
+
+/// The reference's 4 channels, keyed by inquiry-number prefix there (Q/C/T/K);
+/// an explicit enum here instead of parsing a prefix.
+enum InquiryChannel {
+  PRODUCT_QNA // 상품문의 (Q) — tied to a specific listing, see `productId`
+  CUSTOMER_QNA // 고객문의 (C) — general CS, usually 1:1 with one order
+  TALK // 네이버 톡톡 (T) — conversational, uses `ChannelMessage`
+  KAKAO // 카카오 (K) — conversational, uses `ChannelMessage`
+}
+
+enum InquiryStatus {
+  OPEN
+  ANSWERED
+  CLOSED
+}
+
+/// One CS inquiry across all 4 channels (feature-audit §2.3's `naver_inquiries`
+/// unification, adopted verbatim). `content` holds the inquiry body directly
+/// for PRODUCT_QNA/CUSTOMER_QNA (single message, no conversation); for
+/// TALK/KAKAO it is maintained by the `fn_channel_message_rollup` trigger,
+/// which atomically appends each new `ChannelMessage` — never read-modify-write
+/// from application code (see the section comment above).
+model Inquiry {
+  id                String             @id @default(uuid())
+  tenant            Seller             @relation(fields: [tenantId], references: [id])
+  tenantId          String
+  channel           InquiryChannel
+  /// The channel's own inquiry id (Naver's `inquiry_no`, e.g. "Q123"/"T_xxx") —
+  /// paired with `channel` (not `marketplace`, see below) as the idempotent
+  /// upsert key, matching the `(tenantId, marketplace, marketplaceOrderId)`
+  /// pattern `Order` uses (ARK-10).
+  externalInquiryNo String
+  /// Nullable: TALK/KAKAO run through Naver/Kakao respectively, but KAKAO is a
+  /// messaging channel, not one of the `Marketplace` enum's storefronts — no
+  /// value fits, so this is a descriptive attribute here, not part of the
+  /// natural key (that's `channel` + `externalInquiryNo` above). A NOT NULL
+  /// `marketplace` would also make the natural key's uniqueness unreliable:
+  /// Postgres treats NULLs as distinct in unique constraints, so two KAKAO
+  /// rows with the same tenant/externalInquiryNo but both marketplace=NULL
+  /// would NOT collide — a latent gap this design avoids by construction.
+  marketplace       Marketplace?
+  /// ARK-35: which customer asked, once phone-matched against `customers`.
+  /// Nullable for the same reason as `Order.customerId` — no matching service
+  /// exists yet, so every inquiry starts unlinked.
+  customer          Customer?          @relation(fields: [customerId], references: [id])
+  customerId        String?
+  /// Direct snapshot of the channel's reported contact info — populated at
+  /// ingestion regardless of match status, same reasoning as `Order.buyerName`
+  /// alongside its nullable `customerId`: an inquiry must be usable before any
+  /// matching has run.
+  customerName      String?
+  customerPhone     String?
+  /// Which listing this concerns — only meaningful for PRODUCT_QNA, per the
+  /// issue's "품목 구분 컬럼" ask. Nullable: CUSTOMER_QNA/TALK/KAKAO have no
+  /// single listing, and even for PRODUCT_QNA the listing may not have a
+  /// matching `Product` row (sync timing/deleted listing).
+  product           Product?           @relation(fields: [productId], references: [id])
+  productId         String?
+  subject           String?
+  content           String
+  status            InquiryStatus      @default(OPEN)
+  answeredAt        DateTime?
+  /// Untouched original channel payload, same convention as Order.raw.
+  raw               Json?
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  messages          ChannelMessage[]
+  orderLinks        InquiryOrderLink[]
+
+  /// Channel (not marketplace) + the channel's own id — see the `marketplace`
+  /// comment above for why.
+  @@unique([tenantId, channel, externalInquiryNo])
+  @@index([tenantId, customerId])
+  @@index([tenantId, status])
+}
+
+/// TALK/KAKAO conversation messages — append-only (INSERT only, no
+/// UPDATE/DELETE grant; see prisma/migrations for the enforcing `REVOKE`).
+/// This table is the source of truth the reference's v455 fix relies on: an
+/// image/message is durable the moment its row is inserted, before the
+/// `fn_channel_message_rollup` trigger even runs, so a concurrent second
+/// insert can never overwrite it. Deliberately has no `tenantId` of its own —
+/// same reasoning as `OrderItem` (ADR-0002 §2b): only ever reached via its
+/// parent `Inquiry` (already RLS'd); see docs/multi-tenancy.md for the
+/// residual gap this accepts (a future direct query against `ChannelMessage`
+/// alone would not be RLS-protected).
+model ChannelMessage {
+  id          String           @id @default(uuid())
+  inquiry     Inquiry          @relation(fields: [inquiryId], references: [id], onDelete: Cascade)
+  inquiryId   String
+  direction   MessageDirection
+  content     String
+  /// Image/file rehosting (per the issue's explicit ask): each entry is
+  /// `{originalUrl, rehostedUrl, rehostStatus, rehostedAt}`. The reference
+  /// rehosts to its own storage with a 6s timeout and falls back to
+  /// `originalUrl` on failure/timeout, because Naver's CDN URLs expire —
+  /// `rehostedUrl` stays null and `rehostStatus` records the fallback so the
+  /// UI/a retry job can tell "no attachment" apart from "rehost failed, using
+  /// original (may 404 later)". No rehosting worker exists yet in this repo
+  /// (would need live Naver Talk/Kakao credentials, still gated on ARK-22) —
+  /// this column is the storage shape a future rehosting job writes to.
+  attachments Json?
+  sentAt      DateTime
+  createdAt   DateTime         @default(now())
+
+  @@index([inquiryId, sentAt])
+}
+
+enum MessageDirection {
+  CUSTOMER
+  SELLER
+}
+
+/// 문의↔주문 연결 (feature-audit §2.3): CUSTOMER_QNA auto-matches 1:1 via its
+/// order context in the reference; PRODUCT_QNA/TALK need a manual link since
+/// one inquiry can span multiple orders (or vice versa) — hence the composite
+/// PK / join-table shape rather than a single FK on either side.
+model InquiryOrderLink {
+  inquiry   Inquiry  @relation(fields: [inquiryId], references: [id], onDelete: Cascade)
+  inquiryId String
+  order     Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  orderId   String
+  /// "auto" (CUSTOMER_QNA 1:1 match) | "manual" (PRODUCT_QNA/TALK link UI) —
+  /// free-form per the issue's SQL sketch (feature-audit §2.3); no fixed link
+  /// UI exists yet to warrant an enum.
+  linkType  String?
+  linkedAt  DateTime @default(now())
+
+  @@id([inquiryId, orderId])
 }
 
 // --- B2B module: 거래처(Account) + 대량발주(PurchaseOrder) (ARK-16) ---------
