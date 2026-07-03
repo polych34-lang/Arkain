@@ -159,15 +159,20 @@ mismatched `sellerId`/`marketplace` now fails auth-tag verification (throws)
 instead of returning the wrong seller's secret. See
 `test/credentialStore.test.ts`.
 
-## Reused by ARK-35 (`Customer`) and ARK-42 (pricing/Quote)
+## Reused by ARK-35 (`Customer`), ARK-42 (pricing/Quote), and ARK-62 (B2B)
 
-`Customer` (`prisma/migrations/20260703000000_customers_activity_view`) and
-the ARK-36/ARK-42 pricing/Quote tables
-(`prisma/migrations/20260703020001_quote_pricing_rls`) both reuse this exact
-pattern — `ENABLE`/`FORCE ROW LEVEL SECURITY`, the same `tenant_isolation`
-policy shape, the same `arkain_app` grant — rather than inventing a second
-one. See `docs/domain-model.md` "Customer identity (ARK-35)" and "Pricing /
-Quote module (ARK-36/ARK-42)" for what's new in each.
+`Customer` (`prisma/migrations/20260703000000_customers_activity_view`), the
+ARK-36/ARK-42 pricing/Quote tables
+(`prisma/migrations/20260703020001_quote_pricing_rls`), and the ARK-16 B2B
+tables `Account`/`AccountPriceListEntry`/`PurchaseOrder`
+(`prisma/migrations/20260703040000_b2b_tenant_rls_policies`, closing the
+ARK-55-flagged gap) all reuse this exact pattern — `ENABLE`/`FORCE ROW LEVEL
+SECURITY`, the same `tenant_isolation` policy shape, the same `arkain_app`
+grant — rather than inventing a second one. See `docs/domain-model.md`
+"Customer identity (ARK-35)" and "Pricing / Quote module (ARK-36/ARK-42)" for
+what's new in each. `PurchaseOrderItem` follows the `OrderItem`/`QuoteItem`
+precedent instead (no own `tenantId`/RLS — reached only via its already-RLS'd
+parent `PurchaseOrder`).
 
 ## Reused by ARK-37 (`Inquiry`), plus one new pattern (`ChannelMessage`)
 

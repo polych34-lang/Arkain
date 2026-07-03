@@ -56,9 +56,12 @@ export class B2BStore {
     });
   }
 
-  async listPriceListEntries(accountId: string): Promise<AccountPriceListEntry[]> {
+  async listPriceListEntries(
+    tenantId: string,
+    accountId: string,
+  ): Promise<AccountPriceListEntry[]> {
     const rows = await this.prisma.accountPriceListEntry.findMany({
-      where: { accountId },
+      where: { accountId, tenantId },
     });
     return rows.map((r) => ({
       accountId: r.accountId,
@@ -72,7 +75,7 @@ export class B2BStore {
    * price list (throws MissingPriceError — see pricing.ts — if a requested
    * sku has no entry). */
   async createPurchaseOrder(input: CreatePurchaseOrderInput): Promise<PurchaseOrder> {
-    const priceList = await this.listPriceListEntries(input.accountId);
+    const priceList = await this.listPriceListEntries(input.tenantId, input.accountId);
     const { items, totalAmountKrw } = priceLines(input.lines, priceList);
 
     const row = await this.prisma.purchaseOrder.create({
