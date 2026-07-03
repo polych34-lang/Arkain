@@ -202,7 +202,12 @@ export function buildApp(
     checks: { process: "ok" },
   }));
 
-  app.get("/", async () => ({
+  // ARK-64: sellers landing on the bare domain in a browser were shown raw
+  // JSON with no visible way to reach the login screen. This is a seller
+  // product now (not an API-only service), so "/" sends people straight to
+  // the actual UI; the same index is still available at "/api" for anyone
+  // who wants the machine-readable route map.
+  app.get("/api", async () => ({
     name: "ARKAIN",
     description: "Multi-market seller management — order-sync MVP",
     docs: "/health",
@@ -214,6 +219,10 @@ export function buildApp(
     connections: "/connections",
     gsshopImport: "/imports/gsshop",
   }));
+
+  app.get("/", async (_req, reply) => {
+    reply.redirect("/login");
+  });
 
   // --- ENG-Orders-MVP (ARK-5): the unified order dashboard --------------
   app.get("/api/orders", async (req, reply) => {
