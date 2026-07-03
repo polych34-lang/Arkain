@@ -297,6 +297,14 @@ the roadmap below — deliberately, to keep the MVP path short.
     pipeline has no previous-status comparison to detect "just confirmed" vs.
     "re-synced", so wiring it is a separate follow-up. See
     `docs/accounting-module.md`.
+13. **CS channel unification (ARK-37)** — ✅ `Inquiry`/`ChannelMessage`/
+    `InquiryOrderLink` tables, adopting the reference's append-only message log
+    + rollup-trigger design verbatim (the verified fix for its v455 image-loss
+    race). `Inquiry.customerId` links into ARK-35's `Customer`;
+    `customer_activity` gained its planned Inquiry `UNION ALL` arm. Migration
+    verified against a real Postgres-compatible engine, including the trigger's
+    atomic append. No rehosting worker or CS UI yet — schema/FK only, per the
+    issue's scope. See `docs/domain-model.md`.
 
 ## 11. One-way vs two-way doors
 
