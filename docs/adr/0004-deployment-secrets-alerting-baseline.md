@@ -25,13 +25,19 @@ pushed to a real Git host. See §6.
 
 ## 2. Decision — hosting
 
-**Recommendation: Fly.io**, single container, `icn` (Seoul) region, one app
+**Recommendation: Fly.io**, single container, `nrt` (Tokyo) region, one app
 per environment (`arkain-staging`, `arkain-production`). Not yet
 provisioned — see §6.
 
+**Correction (post-provisioning):** `icn` (Seoul) is not an actual Fly.io
+machine region — `fly platform regions` doesn't list it, and a live deploy
+failed with `Region 'icn' cannot host your machine`. `nrt` (Tokyo) is the
+closest available region to Korea; both `fly.staging.toml` and
+`fly.production.toml` use it.
+
 | Option | Trade-off |
 | --- | --- |
-| **Fly.io** (recommended) | Named explicitly in ADR-0001. Git/CLI-based deploy, trivial GitHub Actions integration (`flyctl deploy`), per-app secrets, `icn` region close to Korean marketplace APIs, generous free/cheap tier fits MVP traffic. |
+| **Fly.io** (recommended) | Named explicitly in ADR-0001. Git/CLI-based deploy, trivial GitHub Actions integration (`flyctl deploy`), per-app secrets, `nrt` region closest to Korean marketplace APIs among Fly's actual offerings, generous free/cheap tier fits MVP traffic. |
 | Render | Similar fit; auto-deploy-on-push is *simpler* (no Actions deploy job needed) but that means less control over the migration-then-deploy ordering (§4) and no clean staging/production promotion gate without a paid tier. |
 | Korean cloud (NCP) | Best answer if data residency becomes a compliance requirement; more setup ceremony (VPC, image registry, IAM) than an MVP needs today. Revisit if a customer requires KR-only data residency. |
 

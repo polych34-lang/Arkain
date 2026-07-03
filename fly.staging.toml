@@ -2,7 +2,10 @@
 # (account creation, `fly launch`, secrets, Postgres) — this file alone does
 # not provision anything; `flyctl deploy -c fly.staging.toml` does.
 app = "arkain-staging"
-primary_region = "icn" # Seoul — closest region to Korean marketplace APIs and sellers
+# icn (Seoul) is not an available Fly.io machine region (confirmed via
+# `fly platform regions` and a live deploy failure: "Region 'icn' cannot
+# host your machine"). nrt (Tokyo) is the closest available region to Korea.
+primary_region = "nrt"
 
 [build]
 

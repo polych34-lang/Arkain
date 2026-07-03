@@ -5,10 +5,9 @@ This doc is the operational how-to.
 
 ## Status
 
-Pipeline code is implemented and locally verified. **Not yet live** — see
-"One-time setup" below for the three prerequisites (Git remote, Fly.io
-account, GitHub Environment protection) that a human/CEO needs to complete
-once. Everything else is automatic after that.
+**Staging is live**: https://arkain-staging.fly.dev — deploys automatically
+on every push to `master`. Production is provisioned but not yet deployed
+(manual, reviewed `workflow_dispatch` — see "Deploy" below).
 
 ## Local build/run (unchanged, still the fastest inner loop)
 
@@ -80,13 +79,19 @@ the schema doesn't support yet.
    migration (`release_command`) runs on the Fly app itself, not in CI:
    ```bash
    fly secrets set -a arkain-staging \
-     DATABASE_URL=postgres://... \
+     DATABASE_URL="postgres://postgres:<password>@arkain-staging-db.flycast:5432/postgres?sslmode=disable" \
      CREDENTIAL_ENC_KEY=$(openssl rand -base64 32) \
      NAVER_COMMERCE_CLIENT_ID=... \
      NAVER_COMMERCE_CLIENT_SECRET=... \
      ALERT_WEBHOOK_URL=https://hooks.slack.com/services/...
    # repeat for arkain-production with production values
    ```
+   `sslmode=disable` is required — Fly's internal Postgres proxy port
+   (`.flycast:5432`) doesn't terminate TLS, and Prisma's default SSL
+   negotiation fails there with `P1011: Error opening a TLS connection:
+   unexpected EOF`. Traffic between apps in the same Fly org already runs
+   over an encrypted WireGuard mesh, so this doesn't lose the encryption
+   Postgres SSL would have added.
 
 Once those four are done, `git push` to `master` deploys staging
 automatically; production is one manual, reviewed click away.
