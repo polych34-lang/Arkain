@@ -23,8 +23,10 @@
     "db:deploy": "prisma migrate deploy"
   },
   "dependencies": {
+    "@fastify/multipart": "^10.0.0",
     "@prisma/client": "^6.19.3",
     "bcryptjs": "^3.0.3",
+    "exceljs": "^4.4.0",
     "fastify": "^5.2.0",
     "pino": "^9.5.0",
     "zod": "^3.24.1"

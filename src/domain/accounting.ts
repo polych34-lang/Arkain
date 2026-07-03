@@ -84,6 +84,7 @@ const MARKET_SETTLEMENT_PARTNER_NAME: Record<MarketplaceId, string> = {
   coupang: "쿠팡",
   eleven_st: "11번가",
   esm_2_0: "ESM 2.0",
+  gsshop: "GS샵",
 };
 
 export async function getOrCreateMarketSettlementPartner(

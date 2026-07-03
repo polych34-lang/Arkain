@@ -33,9 +33,16 @@ jobs:
       contents: read
       packages: write
     outputs:
-      image: ghcr.io/${{ github.repository }}:${{ github.sha }}
+      image: ghcr.io/${{ steps.repo.outputs.name }}:${{ github.sha }}
     steps:
       - uses: actions/checkout@v4
+
+      # ghcr.io tags must be lowercase; github.repository preserves the
+      # repo's actual case (e.g. "polych34-lang/Arkain"), which buildx
+      # rejects with "repository name must be lowercase".
+      - name: Compute lowercase image repository
+        id: repo
+        run: echo "name=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-buildx-action@v3
 
@@ -52,8 +59,8 @@ jobs:
           context: .
           push: true
           tags: |
-            ghcr.io/${{ github.repository }}:${{ github.sha }}
-            ghcr.io/${{ github.repository }}:latest
+            ghcr.io/${{ steps.repo.outputs.name }}:${{ github.sha }}
+            ghcr.io/${{ steps.repo.outputs.name }}:latest
 
   deploy-staging:
     needs: build-and-push

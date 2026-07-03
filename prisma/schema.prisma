@@ -19,6 +19,10 @@ enum Marketplace {
   coupang
   eleven_st
   esm_2_0
+  /// GS샵 — no MarketplaceAdapter/fetchOrders; orders arrive via the
+  /// src/imports/gsshop excel-import pipeline (ARK-46). See
+  /// docs/gsshop-excel-import.md.
+  gsshop
 }
 
 /// ARK-10 (per ADR-0002, docs/adr/0002-multi-tenancy-b2b-b2c.md): `Seller`

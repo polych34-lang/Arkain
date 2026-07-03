@@ -138,6 +138,9 @@ function buildSyncDeps(
         connectionsStore: store,
         naverConsentUrl: config.NAVER_SELLER_CONSENT_URL,
       },
+      // ARK-46: GS샵 엑셀 임포트. No adapter/credential — `store` already
+      // structurally satisfies `upsertOrders`.
+      gsshopImport: { store },
     },
     stopScheduler: scheduler.stop,
   };

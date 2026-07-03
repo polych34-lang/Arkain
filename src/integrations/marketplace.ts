@@ -10,11 +10,17 @@
  * unified product/order/settlement schema is owned by ENG-Domain-Model.
  */
 
+/** `gsshop` (GS샵) has no `MarketplaceAdapter` — no public order API, so there is
+ * no `fetchOrders` to implement (ARK-15 §3(a)). Orders arrive via the separate
+ * `src/imports/gsshop` excel-import pipeline instead, which produces the same
+ * `NormalizedOrder` shape so it shares `PrismaDomainStore.upsertOrders` with
+ * every adapter-backed marketplace below. See docs/gsshop-excel-import.md. */
 export type MarketplaceId =
   | "naver_smartstore"
   | "coupang"
   | "eleven_st"
-  | "esm_2_0";
+  | "esm_2_0"
+  | "gsshop";
 
 /** Opaque, resolved per-seller credentials handed to an adapter at call time. */
 export interface SellerCredential {

@@ -1,4 +1,5 @@
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
+import multipart, { type MultipartFile } from "@fastify/multipart";
 import { loadEnv, redactedConfig } from "./config/env.js";
 import { createLogger } from "./logging/logger.js";
 import type {
@@ -12,6 +13,7 @@ import type { SyncSummary } from "./sync/orderSyncEngine.js";
 import { renderOrdersDashboard } from "./web/ordersDashboard.js";
 import { renderNaverOnboarding } from "./web/naverOnboarding.js";
 import { renderConnectionsDashboard } from "./web/connectionsDashboard.js";
+import { renderGsShopImport } from "./web/gsshopImport.js";
 import {
   connectNaverSeller,
   type ConnectionsWriteStore,
@@ -26,6 +28,9 @@ import type {
   PurchaseOrder,
   PurchaseOrderListFilter,
 } from "./domain/b2b/types.js";
+import { parseGsShopExcel } from "./imports/gsshop/gsshopExcelParser.js";
+import { GsShopFormatError } from "./imports/gsshop/gsshop.types.js";
+import type { NormalizedOrder } from "./integrations/marketplace.js";
 
 /** The dashboard's read dependency — `PrismaDomainStore` satisfies this
  * structurally. Kept narrow so tests can supply an in-memory fake. */
@@ -46,6 +51,16 @@ export interface ConnectionsDeps {
    * step, out of this issue's scope) — the onboarding UI degrades honestly
    * to a manual account-id fallback rather than fabricating a link. */
   naverConsentUrl?: string;
+}
+
+/** ARK-46 GS샵 엑셀 임포트 surface — `PrismaDomainStore.upsertOrders` satisfies
+ * this structurally (same store the sync engine's `OrderSyncStore` uses, kept
+ * as its own narrow interface since this route only ever calls the one
+ * method). No adapter/credential here — see src/imports/gsshop. */
+export interface GsShopImportDeps {
+  store: {
+    upsertOrders(orders: NormalizedOrder[], tenantId: string): Promise<number>;
+  };
 }
 
 /** ARK-16 B2B module surface — `B2BStore` satisfies this structurally. */
@@ -74,6 +89,8 @@ export interface BuildAppDeps {
   b2bStore?: B2BStoreDeps;
   /** Seller self-service Naver connect (ARK-21). Omitted the same way `store` is. */
   connections?: ConnectionsDeps;
+  /** GS샵 주문 엑셀 임포트 (ARK-46). Omitted the same way `store` is. */
+  gsshopImport?: GsShopImportDeps;
 }
 
 const VALID_STATUSES = new Set<UnifiedOrderStatus>([
@@ -92,6 +109,7 @@ const VALID_MARKETPLACES = new Set<MarketplaceId>([
   "naver_smartstore",
   "coupang",
   "eleven_st",
+  "gsshop",
 ]);
 
 function parseOrderFilter(query: Record<string, unknown>): OrderListFilter {
@@ -123,6 +141,13 @@ export function buildApp(
 
   const app = Fastify({ loggerInstance: logger });
 
+  // 20MB cap: comfortably above a multi-thousand-row 주문리스트 엑셀, small
+  // enough to not be an easy DoS vector on a pre-auth upload endpoint.
+  void app.register(multipart, {
+    attachFieldsToBody: true,
+    limits: { fileSize: 20 * 1024 * 1024 },
+  });
+
   app.get("/health", async () => ({
     status: "ok",
     service: "arkain",
@@ -139,6 +164,7 @@ export function buildApp(
     dashboard: "/orders",
     onboarding: "/onboarding/naver",
     connections: "/connections",
+    gsshopImport: "/imports/gsshop",
   }));
 
   // --- ENG-Orders-MVP (ARK-5): the unified order dashboard --------------
@@ -213,6 +239,54 @@ export function buildApp(
       return { error: result.error };
     }
     return { connectionId: result.connectionId };
+  });
+
+  // --- GS샵 주문 엑셀 임포트 (ARK-46) — 별도 임포트 컴포넌트, 어댑터 아님 --------
+  //
+  // MarketplaceAdapter/fetchOrders가 없다(ARK-15 §3(a): GS샵은 공개 주문 API가
+  // 없다). 셀러가 GS샵 파트너스 포털에서 내려받은 주문리스트 엑셀을 여기 업로드하면
+  // 파싱해서 오픈마켓 어댑터와 같은 `NormalizedOrder[]` -> `upsertOrders` 경로로
+  // 흘려보낸다. 스케줄러/폴링 없음 — 셀러가 매번 수동으로 업로드(MVP 스코프 판단,
+  // docs/gsshop-excel-import.md).
+  app.get("/imports/gsshop", async (_req, reply) => {
+    reply.type("text/html; charset=utf-8");
+    return renderGsShopImport();
+  });
+
+  app.post("/api/imports/gsshop", async (req, reply) => {
+    if (!deps.gsshopImport) {
+      reply.code(503);
+      return { error: "GS샵 임포트가 아직 설정되지 않았습니다 (DATABASE_URL 미설정)" };
+    }
+    const body = (req.body ?? {}) as {
+      tenantId?: { value: string };
+      file?: MultipartFile;
+    };
+    const tenantId = body.tenantId?.value?.trim();
+    if (!tenantId || !body.file) {
+      reply.code(400);
+      return { error: "tenantId and file are required" };
+    }
+
+    let result;
+    try {
+      const buffer = await body.file.toBuffer();
+      result = await parseGsShopExcel(buffer);
+    } catch (err) {
+      if (err instanceof GsShopFormatError) {
+        reply.code(422);
+        return { error: err.message };
+      }
+      throw err;
+    }
+
+    const totalOrders = await deps.gsshopImport.store.upsertOrders(result.orders, tenantId);
+    return {
+      ordersImported: result.orders.length,
+      totalOrders,
+      rowsRead: result.rowsRead,
+      rowErrors: result.rowErrors,
+    };
   });
 
   // --- B2B module (ARK-16): 거래처(Account) + 대량발주(PurchaseOrder) -------

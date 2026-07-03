@@ -19,8 +19,10 @@ Subsequent ADRs append to `docs/adr/`.
   separate track, channel-expansion priority #2): research only, no code. Finding:
   API availability is per-channel, not uniform — CJ온스타일 has a documented REST
   API (adapter-shaped); GS샵's current partner portal looks Excel-download-based,
-  not an adapter fit. Channel priority and whether to build an Excel-import path
-  are CEO decisions, not yet made.
+  not an adapter fit. CJ온스타일/현대홈쇼핑 adapter priority is still a CEO decision,
+  not yet made. The GS샵 excel-import question was resolved: **ARK-46** built it as
+  a separate, non-adapter import pipeline — see `docs/gsshop-excel-import.md`
+  (still blocked on a real sample file to calibrate the exact column schema).
 - **ADR-0004** (`docs/adr/0004-deployment-secrets-alerting-baseline.md`, ARK-28):
   deploy stage on top of the CI baseline (§8) — Docker image, Fly.io staging/
   production (recommended, not yet provisioned), GitHub Environment-scoped

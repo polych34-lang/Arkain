@@ -111,6 +111,26 @@ const COUPANG_PRODUCT_STATUS: Record<string, UnifiedProductStatus> = {
   DELETING: "SUSPENDED",
 };
 
+/**
+ * GS샵 파트너스 주문리스트 엑셀의 "주문상태" 컬럼 -> unified. **실 샘플 엑셀 미확보
+ * 상태의 최선 추정**(ARK-46, docs/gsshop-excel-import.md 블로커) — 다른 채널처럼
+ * 공개 API 문서 대조조차 못 한 상태라 다른 어댑터보다 신뢰도가 낮다. 매핑에 없는
+ * 값은 전부 `UNKNOWN`으로 떨어지고 `rawStatus`에 원문이 그대로 남으므로, 실 파일
+ * 확보 후 이 테이블만 고치면 재수입 없이 교정 가능하다.
+ */
+const GSSHOP_ORDER_STATUS: Record<string, UnifiedOrderStatus> = {
+  입금전: "PENDING",
+  결제완료: "PAID",
+  상품준비중: "PAID",
+  배송중: "DISPATCHED",
+  배송완료: "DELIVERED",
+  구매확정: "CONFIRMED",
+  취소: "CANCELLED",
+  반품: "RETURNED",
+  교환: "EXCHANGED",
+  MIXED: "MIXED",
+};
+
 const ORDER_STATUS_BY_MARKETPLACE: Record<
   MarketplaceId,
   Record<string, UnifiedOrderStatus> | undefined
@@ -119,6 +139,7 @@ const ORDER_STATUS_BY_MARKETPLACE: Record<
   coupang: COUPANG_ORDER_STATUS,
   eleven_st: undefined,
   esm_2_0: ESM_ORDER_STATUS,
+  gsshop: GSSHOP_ORDER_STATUS,
 };
 
 const PRODUCT_STATUS_BY_MARKETPLACE: Record<
@@ -129,6 +150,8 @@ const PRODUCT_STATUS_BY_MARKETPLACE: Record<
   coupang: COUPANG_PRODUCT_STATUS,
   eleven_st: undefined,
   esm_2_0: ESM_PRODUCT_STATUS,
+  // 엑셀 임포트는 주문만 다룬다 — GS샵에는 상품 카탈로그 개념이 없다(no adapter).
+  gsshop: undefined,
 };
 
 export function toUnifiedOrderStatus(
