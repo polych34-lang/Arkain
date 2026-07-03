@@ -13,6 +13,12 @@ import { PrismaClient } from "@prisma/client";
 import { loadEnv } from "../config/env.js";
 import type { NormalizedOrder } from "../integrations/marketplace.js";
 import { PrismaDomainStore } from "../domain/repository.js";
+import { hashPassword } from "../auth/password.js";
+
+// ARK-57: fixed demo login so the CEO/QA can walk the full 로그인 → 상품등록 →
+// 주문확인 flow against this seeded tenant without signing up a fresh one.
+const DEMO_EMAIL = "demo@arkain.dev";
+const DEMO_PASSWORD = "demo1234!";
 
 const DEMO_ORDERS: NormalizedOrder[] = [
   {
@@ -82,13 +88,20 @@ async function main(): Promise<void> {
   const prisma = new PrismaClient();
   const store = new PrismaDomainStore(prisma);
   // ARK-10: orders are tenant-scoped now, so the demo needs a demo tenant.
+  // ARK-57: that tenant now also needs login credentials so /login can reach
+  // it. Always (re-)set them on the fixed `DEMO_EMAIL`/`DEMO_PASSWORD` pair —
+  // this is fabricated demo data, not a real seller, so a predictable login
+  // across re-runs matters more than "don't silently rotate a credential"
+  // (which is what protects a *real* seller's password elsewhere).
+  const passwordHash = await hashPassword(DEMO_PASSWORD);
   const demoSeller = await prisma.seller.upsert({
     where: { id: "demo-seller" },
-    create: { id: "demo-seller", displayName: "데모 셀러" },
-    update: {},
+    create: { id: "demo-seller", displayName: "데모 셀러", email: DEMO_EMAIL, passwordHash },
+    update: { email: DEMO_EMAIL, passwordHash },
   });
   const total = await store.upsertOrders(DEMO_ORDERS, demoSeller.id);
   console.log(`Seeded ${DEMO_ORDERS.length} demo orders (tenant total: ${total}). Visit /orders to view them.`);
+  console.log(`Demo login: ${DEMO_EMAIL} / ${DEMO_PASSWORD}`);
   await prisma.$disconnect();
 }
 

@@ -307,6 +307,16 @@ the roadmap below — deliberately, to keep the MVP path short.
     verified against a real Postgres-compatible engine, including the trigger's
     atomic append. No rehosting worker or CS UI yet — schema/FK only, per the
     issue's scope. See `docs/domain-model.md`.
+14. **Seller MVP screens: 로그인/워크스페이스/상품등록/주문확인 (ARK-57)** — ✅
+    first seller-facing UI on top of ARK-4/10/16/34's backend: sign-up
+    (creates the `Seller` login + workspace row in one step), login (HMAC
+    session cookie, no new dependency), manual 상품등록 (`Marketplace.direct`),
+    and ARK-5's order dashboard now session-scoped. Migration + full flow
+    (sign-up, tenant isolation, product registration, order list) verified
+    end-to-end against a real local Postgres, not just unit-tested — see
+    `docs/seller-mvp-screens.md`. Calendar 매출/정산 dashboard (ARK-14 spec,
+    ARK-17 implementation) and staging deploy (ARK-28 pattern) are this
+    issue's named follow-ups, not done here.
 
 ## 11. One-way vs two-way doors
 

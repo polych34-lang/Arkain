@@ -4,6 +4,7 @@ import { buildApp, type BuildAppDeps } from "./app.js";
 import { loadEnv } from "./config/env.js";
 import { PrismaDomainStore } from "./domain/repository.js";
 import { B2BStore } from "./domain/b2b/repository.js";
+import { AuthStore } from "./auth/authStore.js";
 import { NaverSmartstoreAdapter } from "./integrations/naver/naver.adapter.js";
 import { EsmAdapter } from "./integrations/esm/esm.adapter.js";
 import { CoupangAdapter } from "./integrations/coupang/coupang.adapter.js";
@@ -141,6 +142,17 @@ function buildSyncDeps(
       // ARK-46: GS샵 엑셀 임포트. No adapter/credential — `store` already
       // structurally satisfies `upsertOrders`.
       gsshopImport: { store },
+      // ARK-57: 로그인/워크스페이스 생성 + 상품등록. Both gated on
+      // SESSION_SECRET on top of the DATABASE_URL/CREDENTIAL_ENC_KEY gate
+      // this function already requires — no session secret, no login.
+      auth: config.SESSION_SECRET
+        ? {
+            store: new AuthStore(prisma),
+            sessionSecret: config.SESSION_SECRET,
+            cookieSecure: config.NODE_ENV === "production",
+          }
+        : undefined,
+      products: config.SESSION_SECRET ? { store } : undefined,
     },
     stopScheduler: scheduler.stop,
   };

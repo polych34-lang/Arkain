@@ -22,9 +22,16 @@ export function renderOrdersDashboard(): string {
   .empty, .error { color: #666; margin-top: 1rem; }
   .toolbar { display: flex; gap: 0.5rem; align-items: center; }
   button { cursor: pointer; padding: 0.35rem 0.75rem; }
+  nav { margin-bottom: 1rem; font-size: 0.9rem; }
+  nav a { margin-right: 1rem; }
 </style>
 </head>
 <body>
+  <nav>
+    <a href="/products">상품등록</a>
+    <a href="/orders">주문확인</a>
+    <a href="/connections">연동관리</a>
+  </nav>
   <div class="toolbar">
     <h1>주문관리 — 통합 주문 대시보드</h1>
     <button id="refresh">새로고침</button>
@@ -55,6 +62,10 @@ export function renderOrdersDashboard(): string {
       status.textContent = "불러오는 중…";
       try {
         const res = await fetch("/api/orders?limit=100");
+        if (res.status === 401) {
+          location.href = "/login";
+          return;
+        }
         const data = await res.json();
         tbody.innerHTML = "";
         if (!data.configured) {

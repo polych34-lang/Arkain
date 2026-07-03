@@ -23,6 +23,10 @@ enum Marketplace {
   /// src/imports/gsshop excel-import pipeline (ARK-46). See
   /// docs/gsshop-excel-import.md.
   gsshop
+  /// ARK-57: seller-entered product with no marketplace sync yet (MVP
+  /// "상품등록" screen). Not a real marketplace — `marketplaceProductId` is a
+  /// synthetic id, never a real channel listing id.
+  direct
 }
 
 /// ARK-10 (per ADR-0002, docs/adr/0002-multi-tenancy-b2b-b2c.md): `Seller`
@@ -35,6 +39,14 @@ enum Marketplace {
 model Seller {
   id                      String                  @id @default(uuid())
   displayName             String
+  /// ARK-57: seller login identity. Sign-up creates the `Seller` (workspace)
+  /// row and the credential in one step — there is no separate `User` model
+  /// yet (one login per workspace is enough for the MVP; multi-user
+  /// workspaces are a later door, same one-tenant-per-row shape as the
+  /// `Tenant` note above).
+  email                   String                  @unique
+  /// bcrypt hash (src/auth/password.ts) — plaintext password never stored.
+  passwordHash            String
   createdAt               DateTime                @default(now())
   connections             MarketplaceConnection[]
   orders                  Order[]

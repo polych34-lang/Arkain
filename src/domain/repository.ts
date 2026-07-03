@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { PrismaClient } from "@prisma/client";
 import type {
   MarketplaceId,
@@ -60,6 +61,16 @@ export interface SyncRunResult {
   ordersPulled: number;
   cursor?: string;
   error?: string;
+}
+
+/** One row in the ARK-57 seller-facing 상품등록 screen. */
+export interface ProductListItem {
+  id: string;
+  name: string;
+  salePriceKrw: number;
+  stockQuantity: number;
+  status: string;
+  createdAt: string; // ISO 8601
 }
 
 /**
@@ -250,5 +261,56 @@ export class PrismaDomainStore {
         error: result.error,
       },
     });
+  }
+
+  /** ARK-57 상품등록: a seller entering one product by hand, no marketplace
+   * sync involved yet. Written as `marketplace: "direct"` with a synthetic
+   * `marketplaceProductId` so it fits the existing unique-key shape
+   * (`upsertProducts` above) without a schema fork — if this product is
+   * later matched to a real marketplace listing, that's a separate future
+   * reconciliation step, not something this MVP screen needs to solve. */
+  async createManualProduct(
+    tenantId: string,
+    input: { name: string; salePriceKrw: number; stockQuantity: number },
+  ): Promise<ProductListItem> {
+    const tenantPrisma = forTenant(this.prisma, tenantId);
+    const row = await tenantPrisma.product.create({
+      data: {
+        tenant: { connect: { id: tenantId } },
+        marketplace: "direct",
+        marketplaceProductId: randomUUID(),
+        name: input.name,
+        salePriceKrw: input.salePriceKrw,
+        stockQuantity: input.stockQuantity,
+        status: input.stockQuantity > 0 ? "ON_SALE" : "OUT_OF_STOCK",
+        rawStatus: "MANUAL",
+        raw: {},
+      },
+    });
+    return {
+      id: row.id,
+      name: row.name,
+      salePriceKrw: row.salePriceKrw,
+      stockQuantity: row.stockQuantity,
+      status: row.status,
+      createdAt: row.createdAt.toISOString(),
+    };
+  }
+
+  /** The 상품등록 screen's read path — one tenant's products, newest first. */
+  async listProducts(tenantId: string): Promise<ProductListItem[]> {
+    const tenantPrisma = forTenant(this.prisma, tenantId);
+    const rows = await tenantPrisma.product.findMany({
+      where: { tenantId },
+      orderBy: { createdAt: "desc" },
+    });
+    return rows.map((r) => ({
+      id: r.id,
+      name: r.name,
+      salePriceKrw: r.salePriceKrw,
+      stockQuantity: r.stockQuantity,
+      status: r.status,
+      createdAt: r.createdAt.toISOString(),
+    }));
   }
 }

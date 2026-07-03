@@ -54,12 +54,19 @@ async function asTenant<T>(tenantId: string, fn: (tx: PGlite) => Promise<T>): Pr
 beforeAll(async () => {
   db = new PGlite();
   await applyMigrations(db);
-  await db.query(`INSERT INTO "Seller" (id, "displayName") VALUES ($1, $2), ($3, $4)`, [
-    "tenant-a",
-    "Tenant A",
-    "tenant-b",
-    "Tenant B",
-  ]);
+  await db.query(
+    `INSERT INTO "Seller" (id, "displayName", email, "passwordHash") VALUES ($1, $2, $3, $4), ($5, $6, $7, $8)`,
+    [
+      "tenant-a",
+      "Tenant A",
+      "tenant-a@test.local",
+      "test-hash-a",
+      "tenant-b",
+      "Tenant B",
+      "tenant-b@test.local",
+      "test-hash-b",
+    ],
+  );
   await db.query(
     `INSERT INTO "PriceSegment" (id, "tenantId", code, name, "updatedAt") VALUES
      ($1,$2,$3,$4, now()), ($5,$6,$7,$8, now())`,

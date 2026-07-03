@@ -30,6 +30,12 @@ const EnvSchema = z.object({
   // before any seller marketplace credential is stored.
   CREDENTIAL_ENC_KEY: z.string().min(1).optional(),
 
+  // ARK-57: HMAC secret for the seller session cookie (src/auth/session.ts).
+  // Optional at boot, same posture as CREDENTIAL_ENC_KEY — required before
+  // login/sign-up is wired in (main.ts only builds `deps.auth` when both
+  // this and DATABASE_URL are set).
+  SESSION_SECRET: z.string().min(1).optional(),
+
   // Naver Commerce app-level credentials. Optional until the Naver spike.
   NAVER_COMMERCE_CLIENT_ID: z.string().optional(),
   NAVER_COMMERCE_CLIENT_SECRET: z.string().optional(),
@@ -116,6 +122,7 @@ export function redactedConfig(cfg: AppConfig): Record<string, unknown> {
     LOG_LEVEL: cfg.LOG_LEVEL,
     DATABASE_URL: mask(cfg.DATABASE_URL),
     CREDENTIAL_ENC_KEY: mask(cfg.CREDENTIAL_ENC_KEY),
+    SESSION_SECRET: mask(cfg.SESSION_SECRET),
     NAVER_COMMERCE_CLIENT_ID: mask(cfg.NAVER_COMMERCE_CLIENT_ID),
     NAVER_COMMERCE_CLIENT_SECRET: mask(cfg.NAVER_COMMERCE_CLIENT_SECRET),
     NAVER_COMMERCE_BASE_URL: cfg.NAVER_COMMERCE_BASE_URL,

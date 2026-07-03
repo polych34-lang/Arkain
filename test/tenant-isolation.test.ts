@@ -191,12 +191,19 @@ const LEDGER_FOR_RULES: Record<string, string> = {
 beforeAll(async () => {
   db = new PGlite();
   await applyMigrations(db);
-  await db.query(`INSERT INTO "Seller" (id, "displayName") VALUES ($1, $2), ($3, $4)`, [
-    TENANT_A,
-    "Tenant A",
-    TENANT_B,
-    "Tenant B",
-  ]);
+  await db.query(
+    `INSERT INTO "Seller" (id, "displayName", email, "passwordHash") VALUES ($1, $2, $3, $4), ($5, $6, $7, $8)`,
+    [
+      TENANT_A,
+      "Tenant A",
+      "tenant-a@test.local",
+      "test-hash-a",
+      TENANT_B,
+      "Tenant B",
+      "tenant-b@test.local",
+      "test-hash-b",
+    ],
+  );
 
   for (const model of MODELS) {
     for (const tenantId of [TENANT_A, TENANT_B]) {

@@ -14,11 +14,22 @@ import { renderOrdersDashboard } from "./web/ordersDashboard.js";
 import { renderNaverOnboarding } from "./web/naverOnboarding.js";
 import { renderConnectionsDashboard } from "./web/connectionsDashboard.js";
 import { renderGsShopImport } from "./web/gsshopImport.js";
+import { renderSignup } from "./web/signup.js";
+import { renderLogin } from "./web/login.js";
+import { renderProductsDashboard } from "./web/productsDashboard.js";
 import {
   connectNaverSeller,
   type ConnectionsWriteStore,
 } from "./connect/naverSellerConnect.js";
 import type { CredentialStore } from "./secrets/credentialStore.js";
+import { hashPassword, verifyPassword } from "./auth/password.js";
+import {
+  getSessionSellerId,
+  sessionClearCookieHeader,
+  sessionSetCookieHeader,
+} from "./auth/session.js";
+import type { SellerAuthRecord } from "./auth/authStore.js";
+import type { ProductListItem } from "./domain/repository.js";
 import { MissingPriceError } from "./domain/b2b/pricing.js";
 import { InvalidTransitionError } from "./domain/b2b/purchaseOrderStateMachine.js";
 import type {
@@ -63,6 +74,36 @@ export interface GsShopImportDeps {
   };
 }
 
+/** ARK-57 로그인/워크스페이스 생성 surface. `AuthStore` satisfies this
+ * structurally. Omitted the same way `store` is — undefined means the
+ * pre-auth posture (no session layer at all) that every existing route
+ * above already documents as its interim default. */
+export interface AuthDeps {
+  store: {
+    createSeller(input: {
+      email: string;
+      passwordHash: string;
+      displayName: string;
+    }): Promise<SellerAuthRecord>;
+    findSellerByEmail(email: string): Promise<SellerAuthRecord | null>;
+  };
+  sessionSecret: string;
+  /** `Secure` cookie attribute — true outside local dev (config.NODE_ENV). */
+  cookieSecure: boolean;
+}
+
+/** ARK-57 상품등록 surface — `PrismaDomainStore` satisfies this structurally
+ * alongside `OrderReadStore` etc. */
+export interface ProductsDeps {
+  store: {
+    createManualProduct(
+      tenantId: string,
+      input: { name: string; salePriceKrw: number; stockQuantity: number },
+    ): Promise<ProductListItem>;
+    listProducts(tenantId: string): Promise<ProductListItem[]>;
+  };
+}
+
 /** ARK-16 B2B module surface — `B2BStore` satisfies this structurally. */
 export interface B2BStoreDeps {
   createAccount(input: CreateAccountInput): Promise<Account>;
@@ -91,6 +132,10 @@ export interface BuildAppDeps {
   connections?: ConnectionsDeps;
   /** GS샵 주문 엑셀 임포트 (ARK-46). Omitted the same way `store` is. */
   gsshopImport?: GsShopImportDeps;
+  /** 로그인/워크스페이스 생성 (ARK-57). Omitted the same way `store` is. */
+  auth?: AuthDeps;
+  /** 상품등록 (ARK-57). Omitted the same way `store` is. */
+  products?: ProductsDeps;
 }
 
 const VALID_STATUSES = new Set<UnifiedOrderStatus>([
@@ -161,6 +206,9 @@ export function buildApp(
     name: "ARKAIN",
     description: "Multi-market seller management — order-sync MVP",
     docs: "/health",
+    signup: "/signup",
+    login: "/login",
+    products: "/products",
     dashboard: "/orders",
     onboarding: "/onboarding/naver",
     connections: "/connections",
@@ -168,11 +216,25 @@ export function buildApp(
   }));
 
   // --- ENG-Orders-MVP (ARK-5): the unified order dashboard --------------
-  app.get("/api/orders", async (req) => {
+  app.get("/api/orders", async (req, reply) => {
     if (!deps.store) {
       return { configured: false, orders: [] as OrderListItem[] };
     }
     const filter = parseOrderFilter(req.query as Record<string, unknown>);
+    // ARK-57: once auth is configured, every tenant-facing caller must go
+    // through a session (repository.ts's `OrderListFilter.tenantId` doc
+    // comment) — the client-supplied filter is never trusted for tenant
+    // scoping, only the verified session cookie is. Pre-auth deployments
+    // (deps.auth unset, e.g. every existing test) keep the old unscoped
+    // ops-dashboard behavior untouched.
+    if (deps.auth) {
+      const sellerId = getSessionSellerId(req, deps.auth.sessionSecret);
+      if (!sellerId) {
+        reply.code(401);
+        return { error: "로그인이 필요합니다" };
+      }
+      filter.tenantId = sellerId;
+    }
     const orders = await deps.store.listOrders(filter);
     return { configured: true, orders };
   });
@@ -189,6 +251,146 @@ export function buildApp(
     }
     const results = await deps.runSync();
     return { results };
+  });
+
+  // --- ARK-57: 로그인 / 워크스페이스 생성 (sign-up combines both) ------------
+  app.get("/signup", async (_req, reply) => {
+    reply.type("text/html; charset=utf-8");
+    return renderSignup();
+  });
+
+  app.get("/login", async (_req, reply) => {
+    reply.type("text/html; charset=utf-8");
+    return renderLogin();
+  });
+
+  app.post("/api/auth/signup", async (req, reply) => {
+    if (!deps.auth) {
+      reply.code(503);
+      return { error: "회원가입이 아직 설정되지 않았습니다 (DATABASE_URL/SESSION_SECRET 미설정)" };
+    }
+    const body = (req.body ?? {}) as {
+      workspaceName?: string;
+      email?: string;
+      password?: string;
+    };
+    const email = body.email?.trim().toLowerCase();
+    if (!body.workspaceName?.trim() || !email || !body.password) {
+      reply.code(400);
+      return { error: "workspaceName, email, password are required" };
+    }
+    if (body.password.length < 8) {
+      reply.code(400);
+      return { error: "비밀번호는 8자 이상이어야 합니다" };
+    }
+    const existing = await deps.auth.store.findSellerByEmail(email);
+    if (existing) {
+      reply.code(409);
+      return { error: "이미 사용중인 이메일입니다" };
+    }
+    const passwordHash = await hashPassword(body.password);
+    const seller = await deps.auth.store.createSeller({
+      email,
+      passwordHash,
+      displayName: body.workspaceName.trim(),
+    });
+    reply.header(
+      "set-cookie",
+      sessionSetCookieHeader(seller.id, deps.auth.sessionSecret, {
+        secure: deps.auth.cookieSecure,
+      }),
+    );
+    return { sellerId: seller.id, displayName: seller.displayName };
+  });
+
+  app.post("/api/auth/login", async (req, reply) => {
+    if (!deps.auth) {
+      reply.code(503);
+      return { error: "로그인이 아직 설정되지 않았습니다 (DATABASE_URL/SESSION_SECRET 미설정)" };
+    }
+    const body = (req.body ?? {}) as { email?: string; password?: string };
+    const email = body.email?.trim().toLowerCase();
+    if (!email || !body.password) {
+      reply.code(400);
+      return { error: "email and password are required" };
+    }
+    const seller = await deps.auth.store.findSellerByEmail(email);
+    const ok = seller ? await verifyPassword(body.password, seller.passwordHash) : false;
+    if (!seller || !ok) {
+      reply.code(401);
+      return { error: "이메일 또는 비밀번호가 올바르지 않습니다" };
+    }
+    reply.header(
+      "set-cookie",
+      sessionSetCookieHeader(seller.id, deps.auth.sessionSecret, {
+        secure: deps.auth.cookieSecure,
+      }),
+    );
+    return { sellerId: seller.id, displayName: seller.displayName };
+  });
+
+  app.post("/api/auth/logout", async (_req, reply) => {
+    reply.header(
+      "set-cookie",
+      sessionClearCookieHeader({ secure: deps.auth?.cookieSecure ?? false }),
+    );
+    return { ok: true };
+  });
+
+  app.get("/api/auth/me", async (req) => {
+    if (!deps.auth) return { authenticated: false };
+    const sellerId = getSessionSellerId(req, deps.auth.sessionSecret);
+    return { authenticated: sellerId != null, sellerId };
+  });
+
+  // --- ARK-57: 상품등록 (manual product entry, no marketplace sync yet) -----
+  app.get("/products", async (_req, reply) => {
+    reply.type("text/html; charset=utf-8");
+    return renderProductsDashboard();
+  });
+
+  app.get("/api/products", async (req, reply) => {
+    if (!deps.products || !deps.auth) {
+      return { configured: false, products: [] as ProductListItem[] };
+    }
+    const sellerId = getSessionSellerId(req, deps.auth.sessionSecret);
+    if (!sellerId) {
+      reply.code(401);
+      return { error: "로그인이 필요합니다" };
+    }
+    const products = await deps.products.store.listProducts(sellerId);
+    return { configured: true, products };
+  });
+
+  app.post("/api/products", async (req, reply) => {
+    if (!deps.products || !deps.auth) {
+      reply.code(503);
+      return { error: "상품등록이 아직 설정되지 않았습니다 (DATABASE_URL/SESSION_SECRET 미설정)" };
+    }
+    const sellerId = getSessionSellerId(req, deps.auth.sessionSecret);
+    if (!sellerId) {
+      reply.code(401);
+      return { error: "로그인이 필요합니다" };
+    }
+    const body = (req.body ?? {}) as {
+      name?: string;
+      salePriceKrw?: number;
+      stockQuantity?: number;
+    };
+    if (!body.name?.trim() || !Number.isFinite(body.salePriceKrw) || !Number.isFinite(body.stockQuantity)) {
+      reply.code(400);
+      return { error: "name, salePriceKrw, stockQuantity are required" };
+    }
+    if ((body.salePriceKrw as number) < 0 || (body.stockQuantity as number) < 0) {
+      reply.code(400);
+      return { error: "salePriceKrw and stockQuantity must not be negative" };
+    }
+    const product = await deps.products.store.createManualProduct(sellerId, {
+      name: body.name.trim(),
+      salePriceKrw: body.salePriceKrw as number,
+      stockQuantity: body.stockQuantity as number,
+    });
+    return { product };
   });
 
   // --- Seller self-service Naver connect (ARK-21) ------------------------
