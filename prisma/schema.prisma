@@ -48,6 +48,12 @@ model Seller {
   ccTransactions          CcTransaction[]
   ccMerchantMaps          CcMerchantMap[]
   inquiries               Inquiry[]
+  priceSegments           PriceSegment[]
+  pricingRules            PricingRule[]
+  modelSegDiscounts       ModelSegDiscount[]
+  colorTaxonomies         ColorTaxonomy[]
+  colorSurcharges         ColorSurcharge[]
+  quotes                  Quote[]
 }
 
 /// A seller's link to one marketplace. The credential is stored ENCRYPTED
@@ -158,6 +164,9 @@ model Order {
   bankTransactions   BankTransaction[]
   /// ARK-37: manual/auto links to CS inquiries concerning this order.
   inquiryLinks       InquiryOrderLink[]
+  /// ARK-42: quotes converted into this order (Quote.convertedOrderId). No
+  /// conversion logic yet (design doc §5) — structural hook only.
+  convertedFromQuotes Quote[]
   /// Untouched normalized-order payload (which itself retains the marketplace
   /// raw response) — see ARCHITECTURE.md §6 "every number must be traceable".
   raw                Json
@@ -271,6 +280,7 @@ model Customer {
   updatedAt       DateTime  @updatedAt
   orders          Order[]
   inquiries       Inquiry[]
+  quotes          Quote[]
 
   @@unique([tenantId, primaryPhone])
 }
@@ -418,6 +428,187 @@ model InquiryOrderLink {
 
   @@id([inquiryId, orderId])
 }
+
+
+// --- Pricing / Quote module (ARK-36 design, ARK-42 implementation) --------
+//
+// DB-izes what the reference OMS keeps as a single tenant-wide localStorage
+// blob (`pricing_rules`/`color_surcharge`) plus its 3-tier price master
+// (`cost_pricing` -> `price_segments` -> `model_seg_discounts`) — see the
+// ARK-36 schema design doc for the full rationale. `QuoteItem` snapshots
+// every price-calculation input alongside the result so a later
+// PricingRule/ModelSegDiscount/ColorSurcharge change can never alter a past
+// quote's amount.
+
+enum ModelSegPriceType {
+  WHOLESALE // 도매
+  RETAIL // 소비자
+  EVENT // 이벤트
+}
+
+enum QuoteStatus {
+  DRAFT
+  SENT
+  ACCEPTED
+  EXPIRED
+}
+
+/// 업종 세그먼트 마스터 (ARK-36/42). Segment definitions are entirely
+/// tenant-defined — no list is seeded (each business's 업종 mix differs).
+model PriceSegment {
+  id        String   @id @default(uuid())
+  tenant    Seller   @relation(fields: [tenantId], references: [id])
+  tenantId  String
+  code      String
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  pricingRules      PricingRule[]
+  modelSegDiscounts ModelSegDiscount[]
+  colorSurcharges   ColorSurcharge[]
+  quoteItems        QuoteItem[]
+
+  @@unique([tenantId, code])
+}
+
+/// 가격계산 규칙 (ARK-36/42) — replaces the reference's single tenant-wide
+/// localStorage `pricing_rules` blob with a per-(tenant, segment) row so
+/// wholesale/discount factors can differ by 업종.
+model PricingRule {
+  id              String       @id @default(uuid())
+  tenant          Seller       @relation(fields: [tenantId], references: [id])
+  tenantId        String
+  segment         PriceSegment @relation(fields: [segmentId], references: [id])
+  segmentId       String
+  /// 도매가 = 정가 x wholesaleFactor (레퍼런스 기본값 0.70)
+  wholesaleFactor Decimal      @db.Decimal(6, 4)
+  /// 수량할인 10/20/30단위 팩터
+  d10Factor       Decimal      @db.Decimal(6, 4)
+  d20Factor       Decimal      @db.Decimal(6, 4)
+  d30Factor       Decimal      @db.Decimal(6, 4)
+  /// 최종 단가 반올림 단위(원)
+  roundUnit       Int
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  @@unique([tenantId, segmentId])
+}
+
+/// 모델×업종×가격유형별 할인율 (ARK-36/42) — tenant-scoped version of the
+/// reference's UNIQUE(model_name, segment_id, price_type).
+model ModelSegDiscount {
+  id           String            @id @default(uuid())
+  tenant       Seller            @relation(fields: [tenantId], references: [id])
+  tenantId     String
+  segment      PriceSegment      @relation(fields: [segmentId], references: [id])
+  segmentId    String
+  /// Freeform, matching the reference — Product has no normalized model
+  /// entity yet.
+  modelName    String
+  priceType    ModelSegPriceType
+  discountRate Decimal           @db.Decimal(6, 4)
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+
+  @@unique([tenantId, segmentId, modelName, priceType])
+}
+
+/// 색상 원본값 -> 정규화 라벨 (ARK-36/42). Segment-independent — a color name
+/// doesn't change by 업종, only its surcharge amount does (see
+/// ColorSurcharge).
+model ColorTaxonomy {
+  id           String   @id @default(uuid())
+  tenant       Seller   @relation(fields: [tenantId], references: [id])
+  tenantId     String
+  rawValue     String
+  groupLabel   String
+  material     String?
+  displayLabel String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  surcharges ColorSurcharge[]
+
+  @@unique([tenantId, rawValue])
+}
+
+/// 색상 가산값 (ARK-36/42), tenant+segment scoped — same color can cost
+/// differently by 업종 (원가 차이).
+model ColorSurcharge {
+  id              String        @id @default(uuid())
+  tenant          Seller        @relation(fields: [tenantId], references: [id])
+  tenantId        String
+  segment         PriceSegment  @relation(fields: [segmentId], references: [id])
+  segmentId       String
+  colorTaxonomy   ColorTaxonomy @relation(fields: [colorTaxonomyId], references: [id])
+  colorTaxonomyId String
+  surchargeKrw    Int
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@unique([tenantId, segmentId, colorTaxonomyId])
+}
+
+/// 견적 (ARK-36/42). `customerId` nullable for the same reason as
+/// `Order.customerId` (ARK-35) — customer matching is a later batch job.
+/// `convertedOrderId` is a structural hook only; actual Quote->Order
+/// conversion logic is out of scope (design doc §5).
+model Quote {
+  id               String      @id @default(uuid())
+  tenant           Seller      @relation(fields: [tenantId], references: [id])
+  tenantId         String
+  customer         Customer?   @relation(fields: [customerId], references: [id])
+  customerId       String?
+  status           QuoteStatus @default(DRAFT)
+  totalAmountKrw   Int?
+  convertedOrder   Order?      @relation(fields: [convertedOrderId], references: [id])
+  convertedOrderId String?
+  items            QuoteItem[]
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
+
+  @@index([tenantId, customerId])
+  @@index([tenantId, status])
+}
+
+/// 견적 항목 (ARK-36/42). No own tenantId/RLS — same reasoning as OrderItem
+/// (ADR-0002 §2b): always reached through its parent Quote. The unit-price
+/// snapshot fields are this model's entire purpose: every input that fed the
+/// price calculation is stored alongside the result, so later changes to
+/// PricingRule/ModelSegDiscount/ColorSurcharge never alter a past quote's
+/// amount — callers must read `unitPriceKrw`/`lineTotalKrw` as-is and never
+/// recompute them.
+model QuoteItem {
+  id          String @id @default(uuid())
+  quote       Quote  @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  quoteId     String
+  productName String
+  modelName   String
+  color       String
+  quantity    Int
+
+  // --- calculation-input snapshot: segment/model stay resolvable even if
+  // the referenced segment is later deleted (segmentId goes null, code
+  // string remains) ---
+  segment              PriceSegment?     @relation(fields: [segmentId], references: [id], onDelete: SetNull)
+  segmentId            String?
+  segmentCodeSnapshot  String?
+  priceType            ModelSegPriceType
+  basePriceKrw         Int
+  discountRateSnapshot Decimal           @db.Decimal(6, 4)
+  colorSurchargeKrw    Int               @default(0)
+  roundUnitSnapshot    Int
+
+  // --- result snapshot: read-only, never recomputed ---
+  unitPriceKrw Int
+  lineTotalKrw Int
+
+  createdAt DateTime @default(now())
+
+  @@index([quoteId])
+}
+
 
 // --- B2B module: 거래처(Account) + 대량발주(PurchaseOrder) (ARK-16) ---------
 //

@@ -159,14 +159,15 @@ mismatched `sellerId`/`marketplace` now fails auth-tag verification (throws)
 instead of returning the wrong seller's secret. See
 `test/credentialStore.test.ts`.
 
-## Reused by ARK-35 (`Customer`)
+## Reused by ARK-35 (`Customer`) and ARK-42 (pricing/Quote)
 
-`Customer` (`prisma/migrations/20260703000000_customers_activity_view`)
-reuses this exact pattern — `ENABLE`/`FORCE ROW LEVEL SECURITY`, the same
-`tenant_isolation` policy shape, the same `arkain_app` grant — rather than
-inventing a second one. See `docs/domain-model.md` "Customer identity
-(ARK-35)" for what's new there (the table itself, `Order.customerId`, and the
-`customer_activity` VIEW).
+`Customer` (`prisma/migrations/20260703000000_customers_activity_view`) and
+the ARK-36/ARK-42 pricing/Quote tables
+(`prisma/migrations/20260703020001_quote_pricing_rls`) both reuse this exact
+pattern — `ENABLE`/`FORCE ROW LEVEL SECURITY`, the same `tenant_isolation`
+policy shape, the same `arkain_app` grant — rather than inventing a second
+one. See `docs/domain-model.md` "Customer identity (ARK-35)" and "Pricing /
+Quote module (ARK-36/ARK-42)" for what's new in each.
 
 ## Reused by ARK-37 (`Inquiry`), plus one new pattern (`ChannelMessage`)
 
@@ -224,3 +225,36 @@ constraint noted in `docs/order-sync-mvp.md`. What was actually verified:
   tests against fakes — `test/repository.test.ts`,
   `test/credentialStore.test.ts` — since none of that logic depends on
   Postgres actually being reachable.
+
+### Correction (ARK-42): RLS enforcement *can* be verified via PGlite
+
+The "RLS enforcement itself could not be verified" note above turned out to
+be a dead end specific to *how* PGlite was driven, not a real limitation of
+the engine. What failed for ARK-10/ARK-35 was routing through
+`@electric-sql/pglite-socket`'s wire-protocol bridge so the real Prisma CLI
+(`prisma migrate deploy`, `$transaction`) could connect to it — in this
+sandbox that TCP path reliably fails with `P1001` for reasons never fully
+root-caused (plain `net.connect` to the same port succeeds; the Prisma
+query-engine's connection does not, even from the same or a child process).
+
+`test/pricing-schema.test.ts` (ARK-42) verifies RLS enforcement for real by
+skipping the socket/Prisma-CLI layer entirely: `new PGlite()` used
+**in-process** (`db.exec()`/`db.query()`/`db.transaction()`, no network),
+applying every `migration.sql` verbatim, then per-test
+`db.transaction(tx => { tx.exec('SET LOCAL ROLE arkain_app'); tx.query("SELECT
+set_config('app.tenant_id', $1, true)", [tenantId]); ... })` — `SET LOCAL
+ROLE` (not `SET ROLE`) resets at the transaction boundary, so it composes
+cleanly with `set_config(..., true)`'s existing `SET LOCAL` semantics without
+manual `RESET ROLE` bookkeeping. This actually exercises the non-superuser
+`arkain_app` role Postgres RLS requires (see "This only works if the app
+doesn't connect as a superuser" above) and confirmed real policy
+enforcement: cross-tenant `SELECT`s return zero rows, a cross-tenant `INSERT`
+is rejected with a genuine `new row violates row-level security policy`
+error (the `WITH CHECK` clause), and a same-id `UPDATE` issued under the
+wrong tenant affects zero rows (the `USING` clause).
+
+**Implication for future schema issues**: this in-process pattern is the
+one to reuse (not the socket-server one) — see `test/pricing-schema.test.ts`
+for the template. It is fast enough and dependency-light enough (no
+`@electric-sql/pglite-socket`) to run as a real, committed CI test rather
+than an ad-hoc sandbox-only verification.
