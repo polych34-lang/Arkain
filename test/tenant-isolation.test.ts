@@ -346,22 +346,14 @@ describe("tenant isolation: documented no-own-tenantId tables are unaffected (re
 
 describe("tenant isolation: RLS coverage audit — every tenantId-bearing table must be RLS-protected or explicitly allowlisted", () => {
   /**
-   * ARK-55 finding: `Account`/`AccountPriceListEntry`/`PurchaseOrder` (B2B
-   * module, ARK-16) each have their own `tenantId` column — unlike
-   * OrderItem/ChannelMessage/InquiryOrderLine/JournalLine/QuoteItem above,
-   * which deliberately have none — but carry no RLS policy. This is a
-   * documented, deliberate interim state (schema.prisma's B2B module header
-   * comment + docs/adr/0003-b2b-accounts-purchase-orders.md §5: "tenantId is
-   * enforced at the application layer today ... no RLS yet, same interim
-   * posture ADR-0002 §2d describes for Order pre-ARK-10"), not a silent gap
-   * this suite is inventing. It is allowlisted here so this audit stays
-   * green today while still catching the case that actually matters for
-   * regression prevention: any *future* table that adds its own `tenantId`
-   * column without RLS and without being deliberately added to this list.
-   *
-   * Filed as a follow-up hardening item — see the ARK-55 issue thread.
+   * ARK-55 found `Account`/`AccountPriceListEntry`/`PurchaseOrder` (B2B
+   * module, ARK-16) each had their own `tenantId` column but no RLS policy.
+   * ARK-62 closed that gap (prisma/migrations/20260703040000_b2b_tenant_rls_policies).
+   * No tables are allowlisted here today; this stays as the regression net
+   * for any *future* table that adds its own `tenantId` column without RLS
+   * and without being deliberately added to this list.
    */
-  const KNOWN_GAP_NO_RLS_YET = ["Account", "AccountPriceListEntry", "PurchaseOrder"];
+  const KNOWN_GAP_NO_RLS_YET: string[] = [];
 
   it("every table with its own tenantId column has ENABLE+FORCE ROW LEVEL SECURITY, or is an explicitly listed known gap", async () => {
     const tenantTables = await db.query<{ table_name: string }>(

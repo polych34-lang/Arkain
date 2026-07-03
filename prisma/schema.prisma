@@ -621,8 +621,9 @@ model QuoteItem {
 // marketplace origin at all (entered directly, approved internally), so they
 // don't fit Order's (marketplace, marketplaceOrderId) upsert key or
 // OrderStatus's marketplace-fulfillment states. tenantId is enforced at the
-// application layer today (explicit `where: { tenantId }`, no RLS yet) — same
-// interim posture ADR-0002 §2d describes for Order pre-ARK-10.
+// application layer (explicit `where: { tenantId }`) AND, since ARK-62, by
+// Postgres RLS (prisma/migrations/20260703040000_b2b_tenant_rls_policies) —
+// same defense-in-depth posture ARK-10 established for Order/Product/Settlement.
 
 enum AccountPriceTier {
   WHOLESALE // 도매

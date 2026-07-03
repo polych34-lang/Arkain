@@ -213,12 +213,14 @@ validation layer.
 
 - **No marketplace adapter for wholesale.** The whole point (§1) is that this
   flow has no adapter — nothing to add to `MarketplaceAdapter`.
-- **No RLS policies yet.** Tenant scoping is enforced at the application layer
-  (explicit `tenantId` filters) today, same interim state ADR-0002 §2d
-  describes for `Order` pre-ARK-10. Follow-up: once ARK-10's `withTenant()` /
-  RLS policy set lands, add `Account`/`AccountPriceListEntry`/`PurchaseOrder`
-  to it — small, additive, no reshaping needed (every table already carries
-  `tenantId`).
+- **No RLS policies yet.** ~~Tenant scoping is enforced at the application
+  layer (explicit `tenantId` filters) today, same interim state ADR-0002 §2d
+  describes for `Order` pre-ARK-10.~~ **Done — ARK-62**: `Account`/
+  `AccountPriceListEntry`/`PurchaseOrder` now carry the same
+  `ENABLE`/`FORCE ROW LEVEL SECURITY` + `tenant_isolation` policy as `Order`/
+  `Product`/`Settlement` (`prisma/migrations/20260703040000_b2b_tenant_rls_policies`).
+  App-level `tenantId` filters stay in place as defense-in-depth underneath
+  RLS, same as the ARK-10 tables.
 - **No unified 매출관리 rollup across B2B + B2C.** ARK-7 (settlement MVP) will
   need to decide whether the sales dashboard reads `Order` and `PurchaseOrder`
   through a shared read-side view/union, or shows them as separate tabs
