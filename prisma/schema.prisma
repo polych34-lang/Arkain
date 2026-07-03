@@ -40,6 +40,13 @@ model Seller {
   accountPriceListEntries AccountPriceListEntry[]
   purchaseOrders          PurchaseOrder[]
   customers               Customer[]
+  ledgerAccounts          LedgerAccount[]
+  accPartners             AccPartner[]
+  journalEntries          JournalEntry[]
+  bankTransactions        BankTransaction[]
+  bankRules               BankRule[]
+  ccTransactions          CcTransaction[]
+  ccMerchantMaps          CcMerchantMap[]
 }
 
 /// A seller's link to one marketplace. The credential is stored ENCRYPTED
@@ -113,19 +120,28 @@ enum ProductStatus {
 /// marketplaceOrderId), matching the local JSON store's key from the ARK-3
 /// spike so re-running a sync never double-counts.
 model Order {
-  id                 String       @id @default(uuid())
+  id                 String            @id @default(uuid())
   /// ARK-10 (ADR-0002 §2b): tenant boundary (-> Seller.id). Required — every
   /// write path (OrderSyncEngine) sets it, there's no pre-migration data to
   /// backfill (no migration has ever run against a live DB — see
   /// docs/multi-tenancy.md). Enforced again at the DB layer by Postgres RLS.
-  tenant             Seller       @relation(fields: [tenantId], references: [id])
+  tenant             Seller            @relation(fields: [tenantId], references: [id])
   tenantId           String
   /// ARK-35: which customer placed this order, once phone-matched against
   /// `customers`. Nullable — no matching service exists yet (that lands with
   /// the CS/견적 issue that consumes `customer_activity`); every existing and
   /// newly-synced Order starts unlinked.
-  customer           Customer?    @relation(fields: [customerId], references: [id])
+  customer           Customer?         @relation(fields: [customerId], references: [id])
   customerId         String?
+  /// ARK-40 (ARK-39 §2.3): 회계상 채무자(외상매출금 108 상대방) — B2C 주문은 대개 최종 소비자가
+  /// 아니라 정산을 대행하는 마켓플레이스 자체(네이버페이/쿠팡 등, 테넌트당 1개 lazy-생성 `AccPartner`,
+  /// see src/domain/accounting.ts). `customerId`(구매자/CS 매칭)와는 목적이 다른 별개 필드 — 공존.
+  /// Nullable로 시작하는 이유는 customerId와 동일(매칭/생성 로직이 붙기 전까지 동기화가 깨지면 안 됨).
+  partner            AccPartner?       @relation(fields: [partnerId], references: [id])
+  partnerId          String?
+  /// 거래처 삭제 후에도 회계 기록 추적 가능하도록 스냅샷 (customerId 옆의 동일 패턴은 아직 없음 —
+  /// Customer 스냅샷은 ARK-35 스코프 밖).
+  partnerName        String?
   marketplace        Marketplace
   marketplaceOrderId String
   status             OrderStatus
@@ -138,11 +154,12 @@ model Order {
   totalAmountKrw     Int
   items              OrderItem[]
   settlements        Settlement[]
+  bankTransactions   BankTransaction[]
   /// Untouched normalized-order payload (which itself retains the marketplace
   /// raw response) — see ARCHITECTURE.md §6 "every number must be traceable".
   raw                Json
-  createdAt          DateTime     @default(now())
-  updatedAt          DateTime     @updatedAt
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
 
   /// Scoped per tenant so two sellers can never collide on the same
   /// marketplace order id (the ARK-10 bug this migration fixes — the prior
@@ -285,6 +302,9 @@ model Account {
   updatedAt              DateTime                @updatedAt
   priceListEntries       AccountPriceListEntry[]
   purchaseOrders         PurchaseOrder[]
+  /// ARK-40 (ARK-39 §2.2/§4-2): 같은 실체를 가리키는 회계 거래처(`AccPartner`)가 있으면 연결 —
+  /// 중복 데이터 입력 방지용, 선택적.
+  accPartners            AccPartner[]
 
   @@index([tenantId])
 }
@@ -350,4 +370,230 @@ model PurchaseOrderItem {
   quantity        Int
   unitPriceKrw    Int
   lineTotalKrw    Int
+}
+
+// --- Accounting module: 표준계정과목/전표/은행대사/법인카드 (ARK-40, design: ARK-39) --------
+//
+// 더존/KcLep 표준 계정코드로 통일한 복식부기 전표. 하이브리드 전략(ARK-39 §1): 핵심 6개 계정
+// (103/108/251/253/255/404)은 테넌트 공통 고정(isSystemLocked=true, src/domain/accounting.ts의
+// CORE_LEDGER_ACCOUNTS), 비용 세부계정만 업체별 커스터마이징 허용. B2B `Account`(ARK-16)와는
+// 별개 엔티티 — 이름 충돌을 피해 `LedgerAccount`로 명명(ARK-39 §0).
+
+enum LedgerAccountCategory {
+  ASSET
+  LIABILITY
+  EQUITY
+  REVENUE
+  EXPENSE
+}
+
+/// 표준계정과목 마스터 (ARK-39 §2.1). B2B 거래처 `Account`(ARK-16)와는 별개 엔티티 —
+/// `Account`는 "누구에게 대량발주로 파는가"(영업 대상), `LedgerAccount`는 "회계상 어느
+/// 계정과목으로 잡는가"(분개 대상)로 개념이 다르다.
+model LedgerAccount {
+  id             String                @id @default(uuid())
+  tenant         Seller                @relation(fields: [tenantId], references: [id])
+  tenantId       String
+  /// 더존/KcLep 표준 계정코드. 핵심계정(isSystemLocked=true)은 세금신고 로직이 이 값만
+  /// 참조 — name은 테넌트가 바꿔도 code는 불변.
+  code           String
+  name           String
+  category       LedgerAccountCategory
+  /// true = 하이브리드 전략의 "테넌트 공통 고정" 대상(핵심 6개 코드). 신설/코드변경/삭제
+  /// 불가, name만 표시용으로 수정 가능(앱 레벨 가드 — src/domain/accounting.ts).
+  isSystemLocked Boolean               @default(false)
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @updatedAt
+
+  journalLines   JournalLine[]
+  bankRules      BankRule[]
+  ccMerchantMaps CcMerchantMap[]
+
+  @@unique([tenantId, code])
+  @@index([tenantId, category])
+}
+
+enum AccPartnerType {
+  GENERAL // 일반 거래처(고객사/공급업체 등 — 세금계산서 상대방, 마켓 정산주체 포함)
+  CARD // 카드사
+  BANK // 은행
+}
+
+/// 회계 거래처 마스터 (ARK-39 §2.2). B2B `Account`(ARK-16, 대량발주 대상)와는 별개 목적이지만,
+/// 같은 실체를 가리킬 수 있어 linkedAccountId로 선택적으로 연결(중복입력 방지).
+model AccPartner {
+  id                     String         @id @default(uuid())
+  tenant                 Seller         @relation(fields: [tenantId], references: [id])
+  tenantId               String
+  type                   AccPartnerType
+  name                   String
+  businessRegistrationNo String? // 사업자등록번호 (GENERAL 유형)
+  bankAccountNo          String? // 계좌번호(BANK) / 가맹점코드 등(CARD)
+  /// B2B Account(ARK-16)와 동일 거래처인 경우 연결 — 선택, 중복 데이터 입력 방지용.
+  linkedAccount          Account?       @relation(fields: [linkedAccountId], references: [id])
+  linkedAccountId        String?
+  createdAt              DateTime       @default(now())
+  updatedAt              DateTime       @updatedAt
+
+  journalLines   JournalLine[]
+  orders         Order[]
+  bankRules      BankRule[]
+  ccMerchantMaps CcMerchantMap[]
+
+  @@unique([tenantId, type, name])
+  @@index([tenantId, type])
+}
+
+enum JournalEntryStatus {
+  DRAFT
+  POSTED
+  VOID
+}
+
+enum JournalSourceType {
+  ORDER_SALE
+  BANK_TRANSACTION
+  CC_TRANSACTION
+  MANUAL
+}
+
+enum DebitCredit {
+  DEBIT
+  CREDIT
+}
+
+/// 전표 (ARK-39 §2.4). 필수 불변식(앱 레벨 + 유닛 테스트 필수, src/domain/accounting.ts의
+/// assertBalanced): 모든 JournalEntry는 SUM(DEBIT amountKrw) == SUM(CREDIT amountKrw).
+model JournalEntry {
+  id               String             @id @default(uuid())
+  tenant           Seller             @relation(fields: [tenantId], references: [id])
+  tenantId         String
+  entryDate        DateTime // 전표일자(회계상 거래일 — 시스템 등록일과 다를 수 있음)
+  description      String?
+  status           JournalEntryStatus @default(POSTED)
+  sourceType       JournalSourceType
+  /// 원천 레코드 id(Order.id / BankTransaction.id / CcTransaction.id). Prisma가 다형 FK를
+  /// 지원하지 않아 FK 제약 없는 문자열로 둠 — sourceType으로 어느 테이블인지 구분.
+  sourceId         String?
+  lines            JournalLine[]
+  bankTransactions BankTransaction[]
+  ccTransactions   CcTransaction[]
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+
+  @@index([tenantId, entryDate])
+  @@index([tenantId, sourceType, sourceId])
+}
+
+/// OrderItem/QuoteItem과 동일한 이유로 자체 tenantId 없음 — 항상 부모 JournalEntry를 통해서만
+/// 접근·RLS 적용.
+model JournalLine {
+  id             String        @id @default(uuid())
+  journalEntry   JournalEntry  @relation(fields: [journalEntryId], references: [id], onDelete: Cascade)
+  journalEntryId String
+  account        LedgerAccount @relation(fields: [accountId], references: [id])
+  accountId      String
+  side           DebitCredit
+  amountKrw      Int // 정수 원 단위(ARCHITECTURE.md §6 컨벤션)
+  partner        AccPartner?   @relation(fields: [partnerId], references: [id])
+  partnerId      String?
+  partnerName    String? // Order.partnerName과 동일한 스냅샷 패턴
+  memo           String?
+
+  @@index([journalEntryId])
+  @@index([accountId])
+}
+
+enum BankTransactionDirection {
+  DEPOSIT
+  WITHDRAWAL
+}
+
+/// 은행 대사 (ARK-39 §2.5).
+model BankTransaction {
+  id               String                   @id @default(uuid())
+  tenant           Seller                   @relation(fields: [tenantId], references: [id])
+  tenantId         String
+  transactionDate  DateTime
+  /// 원본 적요(정규화 전, 감사용 + BankRule 학습의 입력)
+  rawDescription   String
+  amountKrw        Int
+  direction        BankTransactionDirection
+  matchedOrder     Order?                   @relation(fields: [matchedOrderId], references: [id])
+  matchedOrderId   String?
+  /// 결제/정산 레코드 연결(Settlement 등). ARK-7(정산 롤업)이 blocked 상태라 지금은 FK 없는
+  /// 문자열로만 남김 — ARK-7이 풀리면 실제 FK로 강화.
+  matchedPaymentId String?
+  journalEntry     JournalEntry?            @relation(fields: [journalEntryId], references: [id])
+  journalEntryId   String?
+  /// 복합분개 초안(2줄로 안 끝나는 경우) — [{accountCode, amountKrw, partnerId?, memo}] 형태.
+  /// UI에서 조정 후 확정되면 실제 JournalEntry/JournalLine으로 변환.
+  splitLines       Json?
+  createdAt        DateTime                 @default(now())
+
+  @@index([tenantId, transactionDate])
+  @@index([tenantId, matchedOrderId])
+}
+
+/// 적요 → 계정과목 자동분류 학습 규칙.
+model BankRule {
+  id           String        @id @default(uuid())
+  tenant       Seller        @relation(fields: [tenantId], references: [id])
+  tenantId     String
+  matchPattern String // 적요 부분 문자열 매칭(정규식 지원 여부는 후속 구현에서 결정)
+  account      LedgerAccount @relation(fields: [accountId], references: [id])
+  accountId    String
+  partner      AccPartner?   @relation(fields: [partnerId], references: [id])
+  partnerId    String?
+  priority     Int           @default(0)
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  @@index([tenantId, priority])
+}
+
+enum CcTaxType {
+  TAXABLE // 과세
+  EXEMPT // 면세
+  NON_DEDUCTIBLE // 불공제
+  UNKNOWN
+}
+
+/// 법인카드 (ARK-39 §2.6).
+model CcTransaction {
+  id              String         @id @default(uuid())
+  tenant          Seller         @relation(fields: [tenantId], references: [id])
+  tenantId        String
+  transactionDate DateTime
+  merchantName    String
+  amountKrw       Int
+  /// 카드사 명세서 raw row 해시 — 같은 명세서 재업로드 시 중복 방지(테넌트 스코프 내에서만).
+  sourceHash      String
+  taxType         CcTaxType      @default(UNKNOWN)
+  merchantMap     CcMerchantMap? @relation(fields: [merchantMapId], references: [id])
+  merchantMapId   String?
+  journalEntry    JournalEntry?  @relation(fields: [journalEntryId], references: [id])
+  journalEntryId  String?
+  createdAt       DateTime       @default(now())
+
+  @@unique([tenantId, sourceHash])
+  @@index([tenantId, transactionDate])
+}
+
+/// 가맹점 → 계정과목/거래처 매핑.
+model CcMerchantMap {
+  id                  String          @id @default(uuid())
+  tenant              Seller          @relation(fields: [tenantId], references: [id])
+  tenantId            String
+  merchantNamePattern String
+  account             LedgerAccount   @relation(fields: [accountId], references: [id])
+  accountId           String
+  partner             AccPartner?     @relation(fields: [partnerId], references: [id])
+  partnerId           String?
+  defaultTaxType      CcTaxType       @default(TAXABLE)
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
+  transactions        CcTransaction[]
+
+  @@index([tenantId])
 }

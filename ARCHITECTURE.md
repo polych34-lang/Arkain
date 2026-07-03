@@ -287,6 +287,16 @@ the roadmap below — deliberately, to keep the MVP path short.
     Postgres-compatible engine (DDL, unique/FK constraints, and the view's
     JOIN all behave as expected). No app-layer writer yet — see
     `docs/domain-model.md`.
+12. **Accounting module (ARK-40, design: ARK-39)** — ✅ standard chart of
+    accounts (더존/KcLep 코드) + double-entry journal + 매출 자동분개, reusing
+    ARK-10's `tenant_id`/RLS pattern on all 7 new tenant-scoped tables.
+    Migration SQL verified against a real Postgres-compatible engine (all 5
+    migrations applied cleanly from a cold database). The revenue
+    auto-posting function (`postSalesJournalEntry`) is idempotent and unit-
+    tested but not yet wired into the live order-sync pipeline — that
+    pipeline has no previous-status comparison to detect "just confirmed" vs.
+    "re-synced", so wiring it is a separate follow-up. See
+    `docs/accounting-module.md`.
 
 ## 11. One-way vs two-way doors
 
