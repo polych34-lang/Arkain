@@ -65,19 +65,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: "npm"
-      - run: npm ci
-
-      # Release step: apply pending migrations BEFORE the new image goes
-      # live, same DB the new image will connect to.
-      - name: Run pending migrations
-        run: npm run db:deploy
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-
+      # Migrations run via fly.staging.toml's `release_command`, in a
+      # temporary machine on Fly's private network (this runner can't reach
+      # the Postgres app's .flycast address directly). A failing migration
+      # aborts the deploy before the new image is promoted.
       - uses: superfly/flyctl-actions/setup-flyctl@master
       - name: Deploy to Fly.io (staging)
         run: flyctl deploy -c fly.staging.toml --image ${{ needs.build-and-push.outputs.image }} --remote-only
@@ -94,17 +85,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: "npm"
-      - run: npm ci
-
-      - name: Run pending migrations
-        run: npm run db:deploy
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-
+      # See deploy-staging: migrations run via fly.production.toml's
+      # `release_command` on Fly's private network, not from this runner.
       - uses: superfly/flyctl-actions/setup-flyctl@master
       - name: Deploy to Fly.io (production)
         run: flyctl deploy -c fly.production.toml --image ${{ needs.build-and-push.outputs.image }} --remote-only

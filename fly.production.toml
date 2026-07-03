@@ -6,6 +6,12 @@ primary_region = "icn"
 
 [build]
 
+[deploy]
+  # See fly.staging.toml — same reasoning, runs on Fly's private network.
+  # Needs DATABASE_URL set as a Fly app secret
+  # (`fly secrets set -a arkain-production DATABASE_URL=...`).
+  release_command = "npm run db:deploy"
+
 [env]
   NODE_ENV = "production"
   PORT = "3000"

@@ -66,19 +66,27 @@ CI `secret-scan` job blocks any tracked `.env`.
 **CI/CD (build + release):** GitHub Actions **encrypted secrets**, scoped
 per-environment (`staging` / `production` GitHub Environments) rather than
 repo-wide, so a staging secret can never leak into a production deploy job
-and vice versa. Two secrets per environment drive the pipeline itself:
+and vice versa. One secret per environment drives the pipeline itself:
 
-- `DATABASE_URL` — used by the `db:deploy` (`prisma migrate deploy`) release
-  step, run **before** the new image goes live against that database.
 - `FLY_API_TOKEN` — scoped to that Fly.io app only (`flyctl tokens create
-  deploy -a <app>`), not an org-wide token.
+  deploy -a <app>`), not an org-wide token. Used only to run `flyctl deploy`.
 
-**Running app secrets** (`CREDENTIAL_ENC_KEY`, `NAVER_COMMERCE_CLIENT_ID/
-SECRET`, `ALERT_WEBHOOK_URL`, per-marketplace app keys as more adapters land)
-are **not** passed through GitHub Actions on every deploy. They're set once
-per Fly app via `flyctl secrets set` (Fly's own encrypted-at-rest secret
-store, injected as env vars at container start) — this keeps them out of CI
-job logs/env entirely and out of the image. This is the "운영 수준 시크릿
+`DATABASE_URL` is **not** a GitHub secret. A plain GitHub-hosted runner
+cannot reach a Fly Postgres app's private `.flycast` address, so
+`db:deploy` (`prisma migrate deploy`) can't run from the Actions job itself.
+Instead it runs as `fly.{staging,production}.toml`'s `release_command`, in a
+temporary machine on Fly's own private network, immediately before the new
+image is promoted — a migration failure there aborts the deploy the same way
+a failed GitHub Actions step would. This puts `DATABASE_URL` in the
+"running app secrets" bucket below instead.
+
+**Running app secrets** (`DATABASE_URL`, `CREDENTIAL_ENC_KEY`,
+`NAVER_COMMERCE_CLIENT_ID/SECRET`, `ALERT_WEBHOOK_URL`, per-marketplace app
+keys as more adapters land) are **not** passed through GitHub Actions on
+every deploy. They're set once per Fly app via `flyctl secrets set` (Fly's
+own encrypted-at-rest secret store, injected as env vars at container start
+— reachable by the `release_command` machine too) — this keeps them out of
+CI job logs/env entirely and out of the image. This is the "운영 수준 시크릿
 관리" upgrade from local-`.env`-only: secrets now have an environment-scoped,
 encrypted, access-controlled home instead of a file on a laptop.
 

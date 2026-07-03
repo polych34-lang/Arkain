@@ -49,11 +49,14 @@ before) and added the `docker-build` sanity job.
   from a `production`-environment reviewer (GitHub Environment protection
   rule, configured once in repo Settings, not in this file).
 
-Both jobs: build once → push to `ghcr.io/<repo>:<sha>` → run
-`prisma migrate deploy` against that environment's `DATABASE_URL` → `flyctl
-deploy` the exact pushed image. Migration-before-deploy ordering means a
-migration failure blocks the deploy instead of shipping code the schema
-doesn't support yet.
+Both jobs: build once → push to `ghcr.io/<repo>:<sha>` → `flyctl deploy` the
+exact pushed image. Deploy runs `fly.{staging,production}.toml`'s
+`release_command` (`prisma migrate deploy`) in a temporary machine on Fly's
+private network **before** promoting the new release — a plain GitHub-hosted
+runner cannot reach a Fly Postgres app's `.flycast` address directly, so
+migrations can't run from the Actions job itself. Migration-before-deploy
+ordering means a migration failure blocks the deploy instead of shipping code
+the schema doesn't support yet.
 
 ## One-time setup (human/CEO action — not done by this issue)
 
@@ -68,15 +71,16 @@ doesn't support yet.
      budget — a managed single instance is enough at MVP scale)
    - `fly tokens create deploy -a arkain-staging` / `-a arkain-production`
 3. **Register GitHub Environments** (repo Settings → Environments):
-   - `staging`: add secrets `FLY_API_TOKEN`, `DATABASE_URL` (the staging
-     Postgres connection string).
-   - `production`: same two secrets pointing at production infra, **plus** a
+   - `staging`: add secret `FLY_API_TOKEN`.
+   - `production`: same secret pointing at the production app, **plus** a
      required-reviewer protection rule so `deploy-production` pauses for a
      human click.
 4. **Set the app-level runtime secrets** once per Fly app (not via GitHub —
-   see ADR-0004 §4 for why):
+   see ADR-0004 §4 for why). This now includes `DATABASE_URL`, since the
+   migration (`release_command`) runs on the Fly app itself, not in CI:
    ```bash
    fly secrets set -a arkain-staging \
+     DATABASE_URL=postgres://... \
      CREDENTIAL_ENC_KEY=$(openssl rand -base64 32) \
      NAVER_COMMERCE_CLIENT_ID=... \
      NAVER_COMMERCE_CLIENT_SECRET=... \
