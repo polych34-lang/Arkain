@@ -13,16 +13,15 @@ import type { MarketplaceAdapter, MarketplaceId } from "./integrations/marketpla
 import type { SyncSummary } from "./sync/orderSyncEngine.js";
 import { renderOrdersDashboard } from "./web/ordersDashboard.js";
 import { renderNaverOnboarding } from "./web/naverOnboarding.js";
+import { renderCoupangOnboarding } from "./web/coupangOnboarding.js";
 import { renderConnectionsDashboard } from "./web/connectionsDashboard.js";
 import { renderGsShopImport } from "./web/gsshopImport.js";
 import { renderSignup } from "./web/signup.js";
 import { renderLogin } from "./web/login.js";
 import { renderProductsDashboard } from "./web/productsDashboard.js";
 import { renderSalesCalendarPlaceholder } from "./web/salesCalendar.js";
-import {
-  connectNaverSeller,
-  type ConnectionsWriteStore,
-} from "./connect/naverSellerConnect.js";
+import { connectNaverSeller } from "./connect/naverSellerConnect.js";
+import { connectCoupangSeller } from "./connect/coupangSellerConnect.js";
 import type { CredentialStore } from "./secrets/credentialStore.js";
 import { hashPassword, verifyPassword } from "./auth/password.js";
 import {
@@ -61,11 +60,19 @@ export interface OrderReadStore {
 }
 
 /** ARK-21 seller self-service connect surface — `PrismaDomainStore` satisfies
- * this structurally alongside `ConnectionsWriteStore`. */
+ * this structurally. */
 export interface ConnectionsDeps {
   naverAdapter: MarketplaceAdapter;
   credentialStore: CredentialStore;
-  connectionsStore: ConnectionsWriteStore & {
+  /** Typed over `MarketplaceId` (not narrowed to Naver's literal) so the same
+   * store object also backs `connectCoupangSeller` (ARK-74) — the real
+   * `PrismaDomainStore.upsertConnection` already accepts any `MarketplaceId`. */
+  connectionsStore: {
+    upsertConnection(
+      tenantId: string,
+      marketplace: MarketplaceId,
+      stored: { ciphertext: string; keyVersion: number },
+    ): Promise<{ id: string }>;
     listConnectionSummaries(tenantId: string): Promise<ConnectionSummary[]>;
   };
   /** Deep link to Naver's SELLER-mode consent screen. Undefined until
@@ -73,6 +80,11 @@ export interface ConnectionsDeps {
    * step, out of this issue's scope) — the onboarding UI degrades honestly
    * to a manual account-id fallback rather than fabricating a link. */
   naverConsentUrl?: string;
+  /** ARK-74: 쿠팡 self-service connect. Optional (unlike `naverAdapter`)
+   * since `buildSyncDeps` may run before the Coupang adapter is wired —
+   * the connect route 503s the same way the naver route does when its
+   * dep is absent. */
+  coupangAdapter?: MarketplaceAdapter;
 }
 
 /** ARK-46 GS샵 엑셀 임포트 surface — `PrismaDomainStore.upsertOrders` satisfies
@@ -230,6 +242,7 @@ export function buildApp(
     dashboard: "/orders",
     salesCalendar: "/sales/calendar",
     onboarding: "/onboarding/naver",
+    coupangOnboarding: "/onboarding/coupang",
     connections: "/connections",
     gsshopImport: "/imports/gsshop",
   }));
@@ -485,6 +498,12 @@ export function buildApp(
     return renderNaverOnboarding({ consentUrl: deps.connections?.naverConsentUrl });
   });
 
+  // --- Seller self-service Coupang connect (ARK-74) ----------------------
+  app.get("/onboarding/coupang", async (_req, reply) => {
+    reply.type("text/html; charset=utf-8");
+    return renderCoupangOnboarding();
+  });
+
   app.get("/connections", async (_req, reply) => {
     reply.type("text/html; charset=utf-8");
     return renderConnectionsDashboard();
@@ -521,6 +540,41 @@ export function buildApp(
       },
       body.tenantId,
       body.accountId.trim(),
+    );
+    if (!result.ok) {
+      reply.code(422);
+      return { error: result.error };
+    }
+    return { connectionId: result.connectionId };
+  });
+
+  app.post("/api/connections/coupang/connect", async (req, reply) => {
+    if (!deps.connections?.coupangAdapter) {
+      reply.code(503);
+      return { error: "쿠팡 연동이 아직 설정되지 않았습니다 (DATABASE_URL/CREDENTIAL_ENC_KEY 미설정)" };
+    }
+    const body = (req.body ?? {}) as {
+      tenantId?: string;
+      vendorId?: string;
+      accessKey?: string;
+      secretKey?: string;
+    };
+    if (!body.tenantId || !body.vendorId || !body.accessKey || !body.secretKey) {
+      reply.code(400);
+      return { error: "tenantId, vendorId, accessKey, secretKey are required" };
+    }
+    const result = await connectCoupangSeller(
+      {
+        adapter: deps.connections.coupangAdapter,
+        credentialStore: deps.connections.credentialStore,
+        store: deps.connections.connectionsStore,
+      },
+      body.tenantId,
+      {
+        vendorId: body.vendorId.trim(),
+        accessKey: body.accessKey.trim(),
+        secretKey: body.secretKey.trim(),
+      },
     );
     if (!result.ok) {
       reply.code(422);

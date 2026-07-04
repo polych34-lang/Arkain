@@ -95,6 +95,7 @@ function buildSyncDeps(
       { retry: { onRetry: onRetryAlert("coupang", alerter, rateLimitThrottle) } },
     ),
   };
+  const coupangAdapter = adapters.coupang as MarketplaceAdapter;
 
   const engine = new OrderSyncEngine(adapters, store, {
     defaultSinceDays: config.NAVER_PULL_SINCE_DAYS,
@@ -138,6 +139,8 @@ function buildSyncDeps(
         credentialStore,
         connectionsStore: store,
         naverConsentUrl: config.NAVER_SELLER_CONSENT_URL,
+        // ARK-74: 쿠팡 self-service connect, same store/credentialStore as naver.
+        coupangAdapter,
       },
       // ARK-46: GS샵 엑셀 임포트. No adapter/credential — `store` already
       // structurally satisfies `upsertOrders`.

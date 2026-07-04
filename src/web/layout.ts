@@ -10,8 +10,9 @@
 /** Left-nav structure, grouped the way ARKAIN OMS's sidebar groups its
  * modules (label + collapsible-looking group of items) — reimplemented
  * fresh here, not copied, since SellerDesk's route list is its own. Items
- * without a real screen yet (매출/정산 캘린더, ARK-17) still get a nav slot
- * with a "준비중" badge instead of being left out, per the board's brief. */
+ * without a real screen yet still get a `badge` (e.g. "준비중") instead of
+ * being left out, per the board's brief; 매출/정산 캘린더 has a grid shell
+ * now (ARK-77) so it no longer carries one — data wiring is still ARK-17. */
 export const NAV_GROUPS: Array<{
   label: string;
   items: Array<{ id: string; label: string; href: string; badge?: string }>;
@@ -26,7 +27,7 @@ export const NAV_GROUPS: Array<{
   {
     label: "매출·정산",
     items: [
-      { id: "sales-calendar", label: "매출/정산 캘린더", href: "/sales/calendar", badge: "준비중" },
+      { id: "sales-calendar", label: "매출/정산 캘린더", href: "/sales/calendar" },
     ],
   },
   {
@@ -34,6 +35,7 @@ export const NAV_GROUPS: Array<{
     items: [
       { id: "connections", label: "연동 현황", href: "/connections" },
       { id: "naver-onboarding", label: "네이버 스마트스토어 연동", href: "/onboarding/naver" },
+      { id: "coupang-onboarding", label: "쿠팡 연동", href: "/onboarding/coupang" },
       { id: "gsshop-import", label: "GS샵 주문 임포트", href: "/imports/gsshop" },
     ],
   },

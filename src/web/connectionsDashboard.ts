@@ -7,7 +7,16 @@ import { renderLayout } from "./layout.js";
  * original scope). ARK-72: the tenantId is now taken from the logged-in
  * session (`/api/auth/me`) instead of a raw text box, so the seller never
  * has to know their own internal id to use the screen.
+ *
+ * ARK-74: 재연동 버튼은 마켓별 온보딩 위저드로 링크한다(이전엔 모든 마켓이
+ * 네이버 위저드로 고정 링크됐었음). 위저드가 없는 마켓은 연동 현황 화면
+ * 자체로 링크해 죽은 경로를 만들지 않는다.
  */
+const ONBOARDING_HREF_BY_MARKETPLACE: Record<string, string> = {
+  naver_smartstore: "/onboarding/naver",
+  coupang: "/onboarding/coupang",
+};
+
 export function renderConnectionsDashboard(): string {
   return renderLayout({
     title: "연동 현황",
@@ -30,6 +39,7 @@ export function renderConnectionsDashboard(): string {
       </table>
       <div id="empty" class="muted" hidden style="margin-top:1rem;">연동된 마켓이 없습니다.</div>
       <script>
+        const onboardingHrefByMarketplace = ${JSON.stringify(ONBOARDING_HREF_BY_MARKETPLACE)};
         const tbody = document.querySelector("#connections tbody");
         const empty = document.querySelector("#empty");
         const status = document.querySelector("#status");
@@ -58,12 +68,16 @@ export function renderConnectionsDashboard(): string {
               const lastSync = c.lastSyncedAt
                 ? new Date(c.lastSyncedAt).toLocaleString("ko-KR") + " (" + c.lastSyncStatus + ")"
                 : "-";
+              const onboardingHref = onboardingHrefByMarketplace[c.marketplace];
+              const reconnectCell = onboardingHref
+                ? \`<a class="button secondary" href="\${onboardingHref}">재연동</a>\`
+                : "";
               tr.innerHTML = \`
                 <td>\${c.marketplace}</td>
                 <td><span class="badge \${badgeClass}">\${c.status}</span></td>
                 <td>\${new Date(c.createdAt).toLocaleString("ko-KR")}</td>
                 <td>\${lastSync}</td>
-                <td><a class="button secondary" href="/onboarding/naver">재연동</a></td>
+                <td>\${reconnectCell}</td>
               \`;
               tbody.appendChild(tr);
             }
