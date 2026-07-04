@@ -19,6 +19,8 @@ import { hashPassword } from "../auth/password.js";
 // 주문확인 flow against this seeded tenant without signing up a fresh one.
 const DEMO_EMAIL = "demo@arkain.dev";
 const DEMO_PASSWORD = "demo1234!";
+// ARK-72: fixed 회사코드 for the demo tenant, alongside DEMO_EMAIL/DEMO_PASSWORD.
+const DEMO_COMPANY_CODE = "DEMO01";
 
 const DEMO_ORDERS: NormalizedOrder[] = [
   {
@@ -96,12 +98,18 @@ async function main(): Promise<void> {
   const passwordHash = await hashPassword(DEMO_PASSWORD);
   const demoSeller = await prisma.seller.upsert({
     where: { id: "demo-seller" },
-    create: { id: "demo-seller", displayName: "데모 셀러", email: DEMO_EMAIL, passwordHash },
-    update: { email: DEMO_EMAIL, passwordHash },
+    create: {
+      id: "demo-seller",
+      displayName: "데모 셀러",
+      email: DEMO_EMAIL,
+      passwordHash,
+      companyCode: DEMO_COMPANY_CODE,
+    },
+    update: { email: DEMO_EMAIL, passwordHash, companyCode: DEMO_COMPANY_CODE },
   });
   const total = await store.upsertOrders(DEMO_ORDERS, demoSeller.id);
   console.log(`Seeded ${DEMO_ORDERS.length} demo orders (tenant total: ${total}). Visit /orders to view them.`);
-  console.log(`Demo login: ${DEMO_EMAIL} / ${DEMO_PASSWORD}`);
+  console.log(`Demo login: 회사코드 ${DEMO_COMPANY_CODE} / ${DEMO_EMAIL} / ${DEMO_PASSWORD}`);
   await prisma.$disconnect();
 }
 

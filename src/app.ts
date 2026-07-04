@@ -17,6 +17,7 @@ import { renderGsShopImport } from "./web/gsshopImport.js";
 import { renderSignup } from "./web/signup.js";
 import { renderLogin } from "./web/login.js";
 import { renderProductsDashboard } from "./web/productsDashboard.js";
+import { renderSalesCalendarPlaceholder } from "./web/salesCalendar.js";
 import {
   connectNaverSeller,
   type ConnectionsWriteStore,
@@ -86,6 +87,8 @@ export interface AuthDeps {
       displayName: string;
     }): Promise<SellerAuthRecord>;
     findSellerByEmail(email: string): Promise<SellerAuthRecord | null>;
+    /** ARK-72: powers `/api/auth/me`'s `displayName` (logged-in topbar). */
+    findSellerById(id: string): Promise<SellerAuthRecord | null>;
   };
   sessionSecret: string;
   /** `Secure` cookie attribute — true outside local dev (config.NODE_ENV). */
@@ -215,6 +218,7 @@ export function buildApp(
     login: "/login",
     products: "/products",
     dashboard: "/orders",
+    salesCalendar: "/sales/calendar",
     onboarding: "/onboarding/naver",
     connections: "/connections",
     gsshopImport: "/imports/gsshop",
@@ -309,7 +313,7 @@ export function buildApp(
         secure: deps.auth.cookieSecure,
       }),
     );
-    return { sellerId: seller.id, displayName: seller.displayName };
+    return { sellerId: seller.id, displayName: seller.displayName, companyCode: seller.companyCode };
   });
 
   app.post("/api/auth/login", async (req, reply) => {
@@ -317,17 +321,18 @@ export function buildApp(
       reply.code(503);
       return { error: "로그인이 아직 설정되지 않았습니다 (DATABASE_URL/SESSION_SECRET 미설정)" };
     }
-    const body = (req.body ?? {}) as { email?: string; password?: string };
+    const body = (req.body ?? {}) as { companyCode?: string; email?: string; password?: string };
+    const companyCode = body.companyCode?.trim().toUpperCase();
     const email = body.email?.trim().toLowerCase();
-    if (!email || !body.password) {
+    if (!companyCode || !email || !body.password) {
       reply.code(400);
-      return { error: "email and password are required" };
+      return { error: "companyCode, email and password are required" };
     }
     const seller = await deps.auth.store.findSellerByEmail(email);
     const ok = seller ? await verifyPassword(body.password, seller.passwordHash) : false;
-    if (!seller || !ok) {
+    if (!seller || !ok || seller.companyCode !== companyCode) {
       reply.code(401);
-      return { error: "이메일 또는 비밀번호가 올바르지 않습니다" };
+      return { error: "회사코드, 이메일 또는 비밀번호가 올바르지 않습니다" };
     }
     reply.header(
       "set-cookie",
@@ -335,7 +340,7 @@ export function buildApp(
         secure: deps.auth.cookieSecure,
       }),
     );
-    return { sellerId: seller.id, displayName: seller.displayName };
+    return { sellerId: seller.id, displayName: seller.displayName, companyCode: seller.companyCode };
   });
 
   app.post("/api/auth/logout", async (_req, reply) => {
@@ -349,7 +354,15 @@ export function buildApp(
   app.get("/api/auth/me", async (req) => {
     if (!deps.auth) return { authenticated: false };
     const sellerId = getSessionSellerId(req, deps.auth.sessionSecret);
-    return { authenticated: sellerId != null, sellerId };
+    if (!sellerId) return { authenticated: false };
+    const seller = await deps.auth.store.findSellerById(sellerId);
+    if (!seller) return { authenticated: false };
+    return {
+      authenticated: true,
+      sellerId,
+      displayName: seller.displayName,
+      companyCode: seller.companyCode,
+    };
   });
 
   // --- ARK-57: 상품등록 (manual product entry, no marketplace sync yet) -----
@@ -400,6 +413,12 @@ export function buildApp(
       stockQuantity: body.stockQuantity as number,
     });
     return { product };
+  });
+
+  // --- ARK-72: 매출/정산 캘린더 nav slot (placeholder, see ARK-17) ----------
+  app.get("/sales/calendar", async (_req, reply) => {
+    reply.type("text/html; charset=utf-8");
+    return renderSalesCalendarPlaceholder();
   });
 
   // --- Seller self-service Naver connect (ARK-21) ------------------------

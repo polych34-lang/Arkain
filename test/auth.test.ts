@@ -14,12 +14,16 @@ function fakeAuthDeps(seed: SellerAuthRecord[] = []): AuthDeps {
     cookieSecure: false,
     store: {
       async createSeller(input) {
-        const row: SellerAuthRecord = { id: `seller-${nextId++}`, ...input };
+        const id = `seller-${nextId++}`;
+        const row: SellerAuthRecord = { id, companyCode: `CODE${id}`, ...input };
         sellers.push(row);
         return row;
       },
       async findSellerByEmail(email) {
         return sellers.find((s) => s.email === email) ?? null;
+      },
+      async findSellerById(id) {
+        return sellers.find((s) => s.id === id) ?? null;
       },
     },
   };
@@ -43,7 +47,7 @@ describe("POST /api/auth/signup", () => {
     await app.close();
   });
 
-  it("creates a seller (workspace) and sets a session cookie", async () => {
+  it("creates a seller (workspace), issues a companyCode, and sets a session cookie", async () => {
     const { app } = buildApp({ NODE_ENV: "test" } as NodeJS.ProcessEnv, {
       auth: fakeAuthDeps(),
     });
@@ -54,6 +58,7 @@ describe("POST /api/auth/signup", () => {
     });
     expect(res.statusCode).toBe(200);
     expect(res.json().sellerId).toBeTruthy();
+    expect(res.json().companyCode).toBeTruthy();
     const cookie = cookieFrom(res);
     expect(cookie).toContain("arkain_sid=");
     const sellerId = getSessionSellerId({ headers: { cookie } }, SESSION_SECRET);
@@ -67,6 +72,7 @@ describe("POST /api/auth/signup", () => {
       email: "dup@test.com",
       passwordHash: "x",
       displayName: "기존 가게",
+      companyCode: "CODE1",
     };
     const { app } = buildApp({ NODE_ENV: "test" } as NodeJS.ProcessEnv, {
       auth: fakeAuthDeps([existing]),
@@ -95,13 +101,14 @@ describe("POST /api/auth/signup", () => {
 });
 
 describe("POST /api/auth/login", () => {
-  it("logs in with correct credentials and sets a session cookie", async () => {
+  it("logs in with correct companyCode/email/password and sets a session cookie", async () => {
     const passwordHash = await hashPassword("correct-password");
     const seller: SellerAuthRecord = {
       id: "seller-1",
       email: "seller@test.com",
       passwordHash,
       displayName: "가게",
+      companyCode: "ABC123",
     };
     const { app } = buildApp({ NODE_ENV: "test" } as NodeJS.ProcessEnv, {
       auth: fakeAuthDeps([seller]),
@@ -109,10 +116,31 @@ describe("POST /api/auth/login", () => {
     const res = await app.inject({
       method: "POST",
       url: "/api/auth/login",
-      payload: { email: "seller@test.com", password: "correct-password" },
+      payload: { companyCode: "ABC123", email: "seller@test.com", password: "correct-password" },
     });
     expect(res.statusCode).toBe(200);
     expect(cookieFrom(res)).toContain("arkain_sid=");
+    await app.close();
+  });
+
+  it("accepts a lowercase companyCode (case-insensitive)", async () => {
+    const passwordHash = await hashPassword("correct-password");
+    const seller: SellerAuthRecord = {
+      id: "seller-1",
+      email: "seller@test.com",
+      passwordHash,
+      displayName: "가게",
+      companyCode: "ABC123",
+    };
+    const { app } = buildApp({ NODE_ENV: "test" } as NodeJS.ProcessEnv, {
+      auth: fakeAuthDeps([seller]),
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/auth/login",
+      payload: { companyCode: "abc123", email: "seller@test.com", password: "correct-password" },
+    });
+    expect(res.statusCode).toBe(200);
     await app.close();
   });
 
@@ -123,6 +151,7 @@ describe("POST /api/auth/login", () => {
       email: "seller@test.com",
       passwordHash,
       displayName: "가게",
+      companyCode: "ABC123",
     };
     const { app } = buildApp({ NODE_ENV: "test" } as NodeJS.ProcessEnv, {
       auth: fakeAuthDeps([seller]),
@@ -130,7 +159,28 @@ describe("POST /api/auth/login", () => {
     const res = await app.inject({
       method: "POST",
       url: "/api/auth/login",
-      payload: { email: "seller@test.com", password: "wrong-password" },
+      payload: { companyCode: "ABC123", email: "seller@test.com", password: "wrong-password" },
+    });
+    expect(res.statusCode).toBe(401);
+    await app.close();
+  });
+
+  it("rejects a mismatched companyCode even with the correct email/password", async () => {
+    const passwordHash = await hashPassword("correct-password");
+    const seller: SellerAuthRecord = {
+      id: "seller-1",
+      email: "seller@test.com",
+      passwordHash,
+      displayName: "가게",
+      companyCode: "ABC123",
+    };
+    const { app } = buildApp({ NODE_ENV: "test" } as NodeJS.ProcessEnv, {
+      auth: fakeAuthDeps([seller]),
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/auth/login",
+      payload: { companyCode: "WRONG1", email: "seller@test.com", password: "correct-password" },
     });
     expect(res.statusCode).toBe(401);
     await app.close();
@@ -143,17 +193,51 @@ describe("POST /api/auth/login", () => {
     const res = await app.inject({
       method: "POST",
       url: "/api/auth/login",
-      payload: { email: "nobody@test.com", password: "whatever1" },
+      payload: { companyCode: "ABC123", email: "nobody@test.com", password: "whatever1" },
     });
     expect(res.statusCode).toBe(401);
     await app.close();
   });
+
+  it("rejects a missing companyCode", async () => {
+    const { app } = buildApp({ NODE_ENV: "test" } as NodeJS.ProcessEnv, {
+      auth: fakeAuthDeps(),
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/auth/login",
+      payload: { email: "nobody@test.com", password: "whatever1" },
+    });
+    expect(res.statusCode).toBe(400);
+    await app.close();
+  });
 });
 
-describe("GET /signup, /login", () => {
+describe("GET /api/auth/me", () => {
+  it("returns displayName and companyCode for a valid session", async () => {
+    const { app } = buildApp({ NODE_ENV: "test" } as NodeJS.ProcessEnv, {
+      auth: fakeAuthDeps(),
+    });
+    const signup = await app.inject({
+      method: "POST",
+      url: "/api/auth/signup",
+      payload: { workspaceName: "아카인 상회", email: "seller@test.com", password: "password1" },
+    });
+    const cookie = cookieFrom(signup);
+    const res = await app.inject({ method: "GET", url: "/api/auth/me", headers: { cookie } });
+    expect(res.json()).toMatchObject({
+      authenticated: true,
+      displayName: "아카인 상회",
+      companyCode: signup.json().companyCode,
+    });
+    await app.close();
+  });
+});
+
+describe("GET /signup, /login, /sales/calendar", () => {
   it("serve HTML shells", async () => {
     const { app } = buildApp({ NODE_ENV: "test" } as NodeJS.ProcessEnv);
-    for (const url of ["/signup", "/login"]) {
+    for (const url of ["/signup", "/login", "/sales/calendar"]) {
       const res = await app.inject({ method: "GET", url });
       expect(res.statusCode).toBe(200);
       expect(res.headers["content-type"]).toMatch(/text\/html/);

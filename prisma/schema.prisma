@@ -39,6 +39,11 @@ enum Marketplace {
 model Seller {
   id                      String                  @id @default(uuid())
   displayName             String
+  /// ARK-72: human-facing tenant identifier, shown at sign-up and required
+  /// (alongside email + password) at login — the 회사코드/계정/비밀번호 pattern
+  /// sellers expect from 사방넷-class tools. Auto-generated at sign-up (not
+  /// user-chosen) so sign-up stays a single step; immutable afterward.
+  companyCode             String                  @unique
   /// ARK-57: seller login identity. Sign-up creates the `Seller` (workspace)
   /// row and the credential in one step — there is no separate `User` model
   /// yet (one login per workspace is enough for the MVP; multi-user

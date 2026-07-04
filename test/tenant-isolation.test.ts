@@ -192,16 +192,18 @@ beforeAll(async () => {
   db = new PGlite();
   await applyMigrations(db);
   await db.query(
-    `INSERT INTO "Seller" (id, "displayName", email, "passwordHash") VALUES ($1, $2, $3, $4), ($5, $6, $7, $8)`,
+    `INSERT INTO "Seller" (id, "displayName", email, "passwordHash", "companyCode") VALUES ($1, $2, $3, $4, $5), ($6, $7, $8, $9, $10)`,
     [
       TENANT_A,
       "Tenant A",
       "tenant-a@test.local",
       "test-hash-a",
+      "CODEA1",
       TENANT_B,
       "Tenant B",
       "tenant-b@test.local",
       "test-hash-b",
+      "CODEB1",
     ],
   );
 
