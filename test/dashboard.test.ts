@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildApp, type OrderReadStore } from "../src/app.js";
-import type { OrderListFilter, OrderListItem } from "../src/domain/repository.js";
+import type { OrderDetail, OrderListFilter, OrderListItem } from "../src/domain/repository.js";
 
 function fakeStore(orders: OrderListItem[]): OrderReadStore {
   return {
@@ -11,6 +11,44 @@ function fakeStore(orders: OrderListItem[]): OrderReadStore {
       return out.slice(0, filter.limit ?? 50);
     },
   };
+}
+
+const AUTH_DEPS = {
+  store: {
+    createSeller: async () => {
+      throw new Error("not used in these tests");
+    },
+    findSellerByEmail: async () => null,
+    findSellerById: async () => null,
+  },
+  sessionSecret: "test-secret",
+  cookieSecure: false,
+};
+
+function fakeDetailStore(details: OrderDetail[]): OrderReadStore {
+  const byId = new Map(details.map((d) => [d.id, d]));
+  return {
+    async listOrders() {
+      return details;
+    },
+    async getOrderById(tenantId: string, orderId: string) {
+      const found = byId.get(orderId);
+      return found && found.id === orderId ? found : null;
+    },
+    async updateOrderStatus(tenantId: string, orderId: string, status) {
+      const found = byId.get(orderId);
+      if (!found) return null;
+      const updated = { ...found, status };
+      byId.set(orderId, updated);
+      return updated;
+    },
+  };
+}
+
+async function loginCookie(sellerId: string) {
+  const { sessionSetCookieHeader } = await import("../src/auth/session.js");
+  const header = sessionSetCookieHeader(sellerId, AUTH_DEPS.sessionSecret, { secure: false });
+  return header.split(";")[0];
 }
 
 const sample: OrderListItem = {
@@ -59,6 +97,104 @@ describe("GET /api/orders", () => {
     const res = await app.inject({ method: "GET", url: "/api/orders?marketplace=bogus&status=bogus" });
     expect(res.statusCode).toBe(200);
     expect(res.json().orders).toEqual([sample]);
+    await app.close();
+  });
+});
+
+const sampleDetail: OrderDetail = {
+  ...sample,
+  items: [{ id: "i1", productName: "테스트 상품", quantity: 2, unitPriceKrw: 2000 }],
+};
+
+describe("GET /api/orders/:id", () => {
+  it("returns 503 when getOrderById/auth isn't configured", async () => {
+    const { app } = buildApp({ NODE_ENV: "test" } as NodeJS.ProcessEnv, {
+      store: fakeStore([sample]),
+    });
+    const res = await app.inject({ method: "GET", url: "/api/orders/1" });
+    expect(res.statusCode).toBe(503);
+    await app.close();
+  });
+
+  it("returns 401 without a session", async () => {
+    const { app } = buildApp({ NODE_ENV: "test" } as NodeJS.ProcessEnv, {
+      store: fakeDetailStore([sampleDetail]),
+      auth: AUTH_DEPS,
+    });
+    const res = await app.inject({ method: "GET", url: "/api/orders/1" });
+    expect(res.statusCode).toBe(401);
+    await app.close();
+  });
+
+  it("returns the order detail with items for the owning tenant", async () => {
+    const { app } = buildApp({ NODE_ENV: "test" } as NodeJS.ProcessEnv, {
+      store: fakeDetailStore([sampleDetail]),
+      auth: AUTH_DEPS,
+    });
+    const cookie = await loginCookie("seller-1");
+    const res = await app.inject({ method: "GET", url: "/api/orders/1", headers: { cookie } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().order).toEqual(sampleDetail);
+    await app.close();
+  });
+
+  it("returns 404 for an unknown order id", async () => {
+    const { app } = buildApp({ NODE_ENV: "test" } as NodeJS.ProcessEnv, {
+      store: fakeDetailStore([sampleDetail]),
+      auth: AUTH_DEPS,
+    });
+    const cookie = await loginCookie("seller-1");
+    const res = await app.inject({ method: "GET", url: "/api/orders/missing", headers: { cookie } });
+    expect(res.statusCode).toBe(404);
+    await app.close();
+  });
+});
+
+describe("PATCH /api/orders/:id", () => {
+  it("updates the order status and returns the updated detail", async () => {
+    const { app } = buildApp({ NODE_ENV: "test" } as NodeJS.ProcessEnv, {
+      store: fakeDetailStore([sampleDetail]),
+      auth: AUTH_DEPS,
+    });
+    const cookie = await loginCookie("seller-1");
+    const res = await app.inject({
+      method: "PATCH",
+      url: "/api/orders/1",
+      headers: { cookie },
+      payload: { status: "DISPATCHED" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().order.status).toBe("DISPATCHED");
+    await app.close();
+  });
+
+  it("rejects an invalid status value", async () => {
+    const { app } = buildApp({ NODE_ENV: "test" } as NodeJS.ProcessEnv, {
+      store: fakeDetailStore([sampleDetail]),
+      auth: AUTH_DEPS,
+    });
+    const cookie = await loginCookie("seller-1");
+    const res = await app.inject({
+      method: "PATCH",
+      url: "/api/orders/1",
+      headers: { cookie },
+      payload: { status: "NOT_A_STATUS" },
+    });
+    expect(res.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it("returns 401 without a session", async () => {
+    const { app } = buildApp({ NODE_ENV: "test" } as NodeJS.ProcessEnv, {
+      store: fakeDetailStore([sampleDetail]),
+      auth: AUTH_DEPS,
+    });
+    const res = await app.inject({
+      method: "PATCH",
+      url: "/api/orders/1",
+      payload: { status: "DISPATCHED" },
+    });
+    expect(res.statusCode).toBe(401);
     await app.close();
   });
 });

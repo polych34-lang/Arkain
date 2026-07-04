@@ -4,6 +4,7 @@ import { loadEnv, redactedConfig } from "./config/env.js";
 import { createLogger } from "./logging/logger.js";
 import type {
   ConnectionSummary,
+  OrderDetail,
   OrderListFilter,
   OrderListItem,
 } from "./domain/repository.js";
@@ -48,6 +49,15 @@ import type { NormalizedOrder } from "./integrations/marketplace.js";
  * structurally. Kept narrow so tests can supply an in-memory fake. */
 export interface OrderReadStore {
   listOrders(filter?: OrderListFilter): Promise<OrderListItem[]>;
+  /** ARK-72 주문 상세/상태 변경 — optional so existing narrow test fakes that
+   * only implement `listOrders` keep compiling; the two routes below 503 when
+   * either method is missing. */
+  getOrderById?(tenantId: string, orderId: string): Promise<OrderDetail | null>;
+  updateOrderStatus?(
+    tenantId: string,
+    orderId: string,
+    status: UnifiedOrderStatus,
+  ): Promise<OrderDetail | null>;
 }
 
 /** ARK-21 seller self-service connect surface — `PrismaDomainStore` satisfies
@@ -250,6 +260,54 @@ export function buildApp(
     }
     const orders = await deps.store.listOrders(filter);
     return { configured: true, orders };
+  });
+
+  // ARK-72: 주문 상세 보기 — always requires a session (unlike the list route
+  // above, which still tolerates pre-auth deployments) since a single order
+  // is inherently a tenant-owned resource, not an ops-dashboard-wide read.
+  app.get("/api/orders/:id", async (req, reply) => {
+    if (!deps.store?.getOrderById || !deps.auth) {
+      reply.code(503);
+      return { error: "주문 상세가 아직 설정되지 않았습니다 (DATABASE_URL/SESSION_SECRET 미설정)" };
+    }
+    const sellerId = getSessionSellerId(req, deps.auth.sessionSecret);
+    if (!sellerId) {
+      reply.code(401);
+      return { error: "로그인이 필요합니다" };
+    }
+    const { id } = req.params as { id: string };
+    const order = await deps.store.getOrderById(sellerId, id);
+    if (!order) {
+      reply.code(404);
+      return { error: "주문을 찾을 수 없습니다" };
+    }
+    return { order };
+  });
+
+  // ARK-72: 주문 상태 변경 — SellerDesk 내부 표시용 상태 갱신. 마켓플레이스 API로의
+  // 반영은 이 화면의 범위 밖(별도 이슈).
+  app.patch("/api/orders/:id", async (req, reply) => {
+    if (!deps.store?.updateOrderStatus || !deps.auth) {
+      reply.code(503);
+      return { error: "주문 상태 변경이 아직 설정되지 않았습니다 (DATABASE_URL/SESSION_SECRET 미설정)" };
+    }
+    const sellerId = getSessionSellerId(req, deps.auth.sessionSecret);
+    if (!sellerId) {
+      reply.code(401);
+      return { error: "로그인이 필요합니다" };
+    }
+    const { id } = req.params as { id: string };
+    const body = (req.body ?? {}) as { status?: string };
+    if (typeof body.status !== "string" || !VALID_STATUSES.has(body.status as UnifiedOrderStatus)) {
+      reply.code(400);
+      return { error: "유효하지 않은 status 값입니다" };
+    }
+    const order = await deps.store.updateOrderStatus(sellerId, id, body.status as UnifiedOrderStatus);
+    if (!order) {
+      reply.code(404);
+      return { error: "주문을 찾을 수 없습니다" };
+    }
+    return { order };
   });
 
   app.get("/orders", async (_req, reply) => {

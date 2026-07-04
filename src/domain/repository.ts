@@ -26,6 +26,11 @@ export interface OrderListItem {
   itemCount: number;
 }
 
+/** One order plus its line items — the ARK-72 주문 상세 화면's read shape. */
+export interface OrderDetail extends OrderListItem {
+  items: Array<{ id: string; productName: string; quantity: number; unitPriceKrw: number }>;
+}
+
 export interface OrderListFilter {
   marketplace?: MarketplaceId;
   status?: UnifiedOrderStatus;
@@ -167,6 +172,49 @@ export class PrismaDomainStore {
       totalAmountKrw: o.totalAmountKrw,
       itemCount: o.items.length,
     }));
+  }
+
+  /** The ARK-72 주문 상세 화면's read path — one tenant's order with its line
+   * items, or `null` if it doesn't exist / belongs to another tenant. */
+  async getOrderById(tenantId: string, orderId: string): Promise<OrderDetail | null> {
+    const order = await forTenant(this.prisma, tenantId).order.findFirst({
+      where: { id: orderId, tenantId },
+      include: { items: true },
+    });
+    if (!order) return null;
+    return {
+      id: order.id,
+      marketplace: order.marketplace as MarketplaceId,
+      marketplaceOrderId: order.marketplaceOrderId,
+      status: order.status as UnifiedOrderStatus,
+      rawStatus: order.rawStatus,
+      orderedAt: order.orderedAt.toISOString(),
+      buyerName: order.buyerName,
+      totalAmountKrw: order.totalAmountKrw,
+      itemCount: order.items.length,
+      items: order.items.map((i) => ({
+        id: i.id,
+        productName: i.productName,
+        quantity: i.quantity,
+        unitPriceKrw: i.unitPriceKrw,
+      })),
+    };
+  }
+
+  /** ARK-72 주문 상태 변경: seller-side override of SellerDesk's own record.
+   * Not pushed back to the marketplace API — that's a separate future
+   * integration, not this MVP screen's job. Returns `null` the same way
+   * `getOrderById` does when the order isn't this tenant's. */
+  async updateOrderStatus(
+    tenantId: string,
+    orderId: string,
+    status: UnifiedOrderStatus,
+  ): Promise<OrderDetail | null> {
+    const tenantPrisma = forTenant(this.prisma, tenantId);
+    const existing = await tenantPrisma.order.findFirst({ where: { id: orderId, tenantId } });
+    if (!existing) return null;
+    await tenantPrisma.order.update({ where: { id: orderId }, data: { status } });
+    return this.getOrderById(tenantId, orderId);
   }
 
   /** Seller self-service connect (ARK-21): create-or-replace this tenant's
