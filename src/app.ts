@@ -19,7 +19,7 @@ import { renderGsShopImport } from "./web/gsshopImport.js";
 import { renderSignup } from "./web/signup.js";
 import { renderLogin } from "./web/login.js";
 import { renderProductsDashboard } from "./web/productsDashboard.js";
-import { renderSalesCalendarPlaceholder } from "./web/salesCalendar.js";
+import { renderSalesCalendarShell } from "./web/salesCalendar.js";
 import { connectNaverSeller } from "./connect/naverSellerConnect.js";
 import { connectCoupangSeller } from "./connect/coupangSellerConnect.js";
 import type { CredentialStore } from "./secrets/credentialStore.js";
@@ -486,10 +486,10 @@ export function buildApp(
     return { product };
   });
 
-  // --- ARK-72: 매출/정산 캘린더 nav slot (placeholder, see ARK-17) ----------
+  // --- ARK-77: 매출/정산 캘린더 그리드 셸 (데이터 연동은 ARK-17) ------------
   app.get("/sales/calendar", async (_req, reply) => {
     reply.type("text/html; charset=utf-8");
-    return renderSalesCalendarPlaceholder();
+    return renderSalesCalendarShell();
   });
 
   // --- Seller self-service Naver connect (ARK-21) ------------------------
