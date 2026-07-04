@@ -53,7 +53,10 @@ export function renderOrdersDashboard(): string {
         </thead>
         <tbody></tbody>
       </table>
-      <div id="empty" class="muted" hidden style="margin-top:1rem;">표시할 주문이 없습니다.</div>
+      <div id="empty" hidden style="margin-top:1.5rem;text-align:center;padding:2rem 1rem;">
+        <p class="muted">표시할 주문이 없습니다. 마켓을 연동하면 주문이 자동으로 동기화됩니다.</p>
+        <a class="button" href="/connections">마켓 연동하러 가기</a>
+      </div>
 
       <div id="detail" class="card" hidden>
         <div class="detail-actions">

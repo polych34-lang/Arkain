@@ -1,4 +1,5 @@
 import { renderLayout } from "./layout.js";
+import { renderOnboardingChecklist } from "./onboardingChecklist.js";
 
 /**
  * ARK-57 상품등록: register one product by hand + see the tenant's product
@@ -17,6 +18,7 @@ export function renderProductsDashboard(): string {
         .form-row label { margin-top: 0; }
         .form-row input { margin: 0.25rem 0 0; }
       </style>
+      ${renderOnboardingChecklist()}
       <div class="card">
         <div class="form-row">
           <div>
@@ -48,12 +50,20 @@ export function renderProductsDashboard(): string {
         </thead>
         <tbody></tbody>
       </table>
-      <div id="empty" class="muted" hidden style="margin-top:1rem;">등록된 상품이 없습니다.</div>
+      <div id="empty" hidden style="margin-top:1.5rem;text-align:center;padding:2rem 1rem;">
+        <p class="muted">등록된 상품이 없습니다. 첫 상품을 등록해보세요.</p>
+        <button type="button" id="emptyCta">상품 등록하러 가기</button>
+      </div>
 
       <script>
         const tbody = document.querySelector("#products tbody");
         const empty = document.querySelector("#empty");
         const msg = document.querySelector("#msg");
+
+        document.querySelector("#emptyCta").addEventListener("click", () => {
+          document.querySelector("#name").scrollIntoView({ behavior: "smooth", block: "center" });
+          document.querySelector("#name").focus();
+        });
 
         async function load() {
           const res = await fetch("/api/products");
