@@ -237,8 +237,8 @@ ${DESIGN_TOKENS_CSS}
   @media (max-width: 900px) {
     #navToggle {
       display: inline-flex; align-items: center; justify-content: center;
-      width: 34px; height: 34px; border: 1px solid var(--border); border-radius: 6px;
-      background: var(--surface); cursor: pointer; margin-right: 0.5rem;
+      width: 34px; height: 34px; padding: 0; border: 1px solid var(--border); border-radius: 6px;
+      background: var(--surface); color: var(--ink); cursor: pointer; margin-right: 0.5rem;
     }
     .topbar { padding: 1rem; }
     .content { padding: 1.1rem; }
