@@ -1,17 +1,22 @@
 import { describe, expect, it } from "vitest";
 import { buildApp, type AuthDeps } from "../src/app.js";
 import type { SellerAuthRecord } from "../src/auth/authStore.js";
-import { hashPassword } from "../src/auth/password.js";
+import { hashPassword, verifyPassword } from "../src/auth/password.js";
 import { getSessionSellerId } from "../src/auth/session.js";
+import type { AlertEvent, AlertNotifier } from "../src/alerting/notifier.js";
 
 const SESSION_SECRET = "test-session-secret";
 
-function fakeAuthDeps(seed: SellerAuthRecord[] = []): AuthDeps {
+function fakeAuthDeps(
+  seed: SellerAuthRecord[] = [],
+  opts: { alerter?: AlertNotifier } = {},
+): AuthDeps {
   const sellers = [...seed];
   let nextId = sellers.length + 1;
   return {
     sessionSecret: SESSION_SECRET,
     cookieSecure: false,
+    alerter: opts.alerter,
     store: {
       async createSeller(input) {
         const id = `seller-${nextId++}`;
@@ -25,6 +30,36 @@ function fakeAuthDeps(seed: SellerAuthRecord[] = []): AuthDeps {
       async findSellerById(id) {
         return sellers.find((s) => s.id === id) ?? null;
       },
+      async setPasswordResetToken(sellerId, tokenHash, expiresAt) {
+        const seller = sellers.find((s) => s.id === sellerId);
+        if (seller) {
+          seller.passwordResetTokenHash = tokenHash;
+          seller.passwordResetExpiresAt = expiresAt;
+        }
+      },
+      async findSellerByResetTokenHash(tokenHash) {
+        return sellers.find((s) => s.passwordResetTokenHash === tokenHash) ?? null;
+      },
+      async resetPassword(sellerId, passwordHash) {
+        const seller = sellers.find((s) => s.id === sellerId);
+        if (seller) {
+          seller.passwordHash = passwordHash;
+          seller.passwordResetTokenHash = null;
+          seller.passwordResetExpiresAt = null;
+        }
+      },
+    },
+  };
+}
+
+/** Records every alert instead of sending anywhere — lets tests assert a
+ * password-reset request fired (or didn't) without a real webhook. */
+function fakeAlerter(): AlertNotifier & { events: AlertEvent[] } {
+  const events: AlertEvent[] = [];
+  return {
+    events,
+    async send(event) {
+      events.push(event);
     },
   };
 }
@@ -234,14 +269,285 @@ describe("GET /api/auth/me", () => {
   });
 });
 
-describe("GET /signup, /login, /sales/calendar", () => {
+describe("GET /signup, /login, /sales/calendar, /account-recovery/*", () => {
   it("serve HTML shells", async () => {
     const { app } = buildApp({ NODE_ENV: "test" } as NodeJS.ProcessEnv);
-    for (const url of ["/signup", "/login", "/sales/calendar"]) {
+    for (const url of [
+      "/signup",
+      "/login",
+      "/sales/calendar",
+      "/account-recovery",
+      "/account-recovery/company-code",
+      "/account-recovery/password",
+      "/account-recovery/reset",
+    ]) {
       const res = await app.inject({ method: "GET", url });
       expect(res.statusCode).toBe(200);
       expect(res.headers["content-type"]).toMatch(/text\/html/);
     }
+    await app.close();
+  });
+});
+
+describe("POST /api/auth/find-company-code", () => {
+  it("returns 503 when auth isn't configured", async () => {
+    const { app } = buildApp({ NODE_ENV: "test" } as NodeJS.ProcessEnv);
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/auth/find-company-code",
+      payload: { email: "seller@test.com" },
+    });
+    expect(res.statusCode).toBe(503);
+    await app.close();
+  });
+
+  it("returns the companyCode for a registered email", async () => {
+    const seller: SellerAuthRecord = {
+      id: "seller-1",
+      email: "seller@test.com",
+      passwordHash: "x",
+      displayName: "가게",
+      companyCode: "ABC123",
+    };
+    const { app } = buildApp({ NODE_ENV: "test" } as NodeJS.ProcessEnv, {
+      auth: fakeAuthDeps([seller]),
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/auth/find-company-code",
+      payload: { email: "seller@test.com" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().companyCode).toBe("ABC123");
+    await app.close();
+  });
+
+  it("404s for an unregistered email", async () => {
+    const { app } = buildApp({ NODE_ENV: "test" } as NodeJS.ProcessEnv, {
+      auth: fakeAuthDeps(),
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/auth/find-company-code",
+      payload: { email: "nobody@test.com" },
+    });
+    expect(res.statusCode).toBe(404);
+    await app.close();
+  });
+
+  it("rate-limits repeated lookups for the same email", async () => {
+    const seller: SellerAuthRecord = {
+      id: "seller-1",
+      email: "seller@test.com",
+      passwordHash: "x",
+      displayName: "가게",
+      companyCode: "ABC123",
+    };
+    const { app } = buildApp({ NODE_ENV: "test" } as NodeJS.ProcessEnv, {
+      auth: fakeAuthDeps([seller]),
+    });
+    let lastStatus = 0;
+    for (let i = 0; i < 6; i++) {
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/auth/find-company-code",
+        payload: { email: "seller@test.com" },
+      });
+      lastStatus = res.statusCode;
+    }
+    expect(lastStatus).toBe(429);
+    await app.close();
+  });
+});
+
+describe("POST /api/auth/forgot-password/request", () => {
+  it("stores a hashed reset token and alerts ops on a valid companyCode+email match", async () => {
+    const seller: SellerAuthRecord = {
+      id: "seller-1",
+      email: "seller@test.com",
+      passwordHash: "x",
+      displayName: "가게",
+      companyCode: "ABC123",
+    };
+    const alerter = fakeAlerter();
+    const { app } = buildApp({ NODE_ENV: "test" } as NodeJS.ProcessEnv, {
+      auth: fakeAuthDeps([seller], { alerter }),
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/auth/forgot-password/request",
+      payload: { companyCode: "ABC123", email: "seller@test.com" },
+    });
+    expect(res.statusCode).toBe(200);
+    // The token itself is never in the HTTP response — only in the ops alert.
+    expect(res.json()).not.toHaveProperty("token");
+    expect(res.json()).not.toHaveProperty("resetToken");
+    expect(alerter.events).toHaveLength(1);
+    expect(alerter.events[0].category).toBe("password_reset");
+    expect(seller.passwordResetTokenHash).toBeTruthy();
+    await app.close();
+  });
+
+  it("gives the exact same response for a non-matching companyCode/email, and fires no alert", async () => {
+    const seller: SellerAuthRecord = {
+      id: "seller-1",
+      email: "seller@test.com",
+      passwordHash: "x",
+      displayName: "가게",
+      companyCode: "ABC123",
+    };
+    const alerter = fakeAlerter();
+    const { app } = buildApp({ NODE_ENV: "test" } as NodeJS.ProcessEnv, {
+      auth: fakeAuthDeps([seller], { alerter }),
+    });
+    const matched = await app.inject({
+      method: "POST",
+      url: "/api/auth/forgot-password/request",
+      payload: { companyCode: "ABC123", email: "seller@test.com" },
+    });
+    const unmatched = await app.inject({
+      method: "POST",
+      url: "/api/auth/forgot-password/request",
+      payload: { companyCode: "WRONG1", email: "nobody@test.com" },
+    });
+    expect(unmatched.statusCode).toBe(matched.statusCode);
+    expect(unmatched.json()).toEqual(matched.json());
+    expect(alerter.events).toHaveLength(1);
+    await app.close();
+  });
+
+  it("rate-limits repeated requests for the same companyCode+email pair", async () => {
+    const { app } = buildApp({ NODE_ENV: "test" } as NodeJS.ProcessEnv, {
+      auth: fakeAuthDeps(),
+    });
+    let lastStatus = 0;
+    for (let i = 0; i < 6; i++) {
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/auth/forgot-password/request",
+        payload: { companyCode: "ABC123", email: "seller@test.com" },
+      });
+      lastStatus = res.statusCode;
+    }
+    expect(lastStatus).toBe(429);
+    await app.close();
+  });
+});
+
+describe("POST /api/auth/forgot-password/reset", () => {
+  async function requestReset(
+    app: ReturnType<typeof buildApp>["app"],
+    alerter: ReturnType<typeof fakeAlerter>,
+  ): Promise<string> {
+    await app.inject({
+      method: "POST",
+      url: "/api/auth/forgot-password/request",
+      payload: { companyCode: "ABC123", email: "seller@test.com" },
+    });
+    const context = alerter.events.at(-1)?.context as { resetToken: string };
+    return context.resetToken;
+  }
+
+  it("resets the password with a valid token and lets the seller log in with it", async () => {
+    const passwordHash = await hashPassword("old-password");
+    const seller: SellerAuthRecord = {
+      id: "seller-1",
+      email: "seller@test.com",
+      passwordHash,
+      displayName: "가게",
+      companyCode: "ABC123",
+    };
+    const alerter = fakeAlerter();
+    const { app } = buildApp({ NODE_ENV: "test" } as NodeJS.ProcessEnv, {
+      auth: fakeAuthDeps([seller], { alerter }),
+    });
+    const token = await requestReset(app, alerter);
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/auth/forgot-password/reset",
+      payload: { token, password: "new-password1" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(await verifyPassword("new-password1", seller.passwordHash)).toBe(true);
+    expect(seller.passwordResetTokenHash).toBeFalsy();
+
+    const login = await app.inject({
+      method: "POST",
+      url: "/api/auth/login",
+      payload: { companyCode: "ABC123", email: "seller@test.com", password: "new-password1" },
+    });
+    expect(login.statusCode).toBe(200);
+    await app.close();
+  });
+
+  it("rejects an invalid token", async () => {
+    const { app } = buildApp({ NODE_ENV: "test" } as NodeJS.ProcessEnv, {
+      auth: fakeAuthDeps(),
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/auth/forgot-password/reset",
+      payload: { token: "not-a-real-token", password: "new-password1" },
+    });
+    expect(res.statusCode).toBe(401);
+    await app.close();
+  });
+
+  it("rejects reusing a token a second time", async () => {
+    const passwordHash = await hashPassword("old-password");
+    const seller: SellerAuthRecord = {
+      id: "seller-1",
+      email: "seller@test.com",
+      passwordHash,
+      displayName: "가게",
+      companyCode: "ABC123",
+    };
+    const alerter = fakeAlerter();
+    const { app } = buildApp({ NODE_ENV: "test" } as NodeJS.ProcessEnv, {
+      auth: fakeAuthDeps([seller], { alerter }),
+    });
+    const token = await requestReset(app, alerter);
+
+    const first = await app.inject({
+      method: "POST",
+      url: "/api/auth/forgot-password/reset",
+      payload: { token, password: "new-password1" },
+    });
+    expect(first.statusCode).toBe(200);
+
+    const second = await app.inject({
+      method: "POST",
+      url: "/api/auth/forgot-password/reset",
+      payload: { token, password: "another-password1" },
+    });
+    expect(second.statusCode).toBe(401);
+    await app.close();
+  });
+
+  it("rejects an expired token", async () => {
+    const passwordHash = await hashPassword("old-password");
+    const seller: SellerAuthRecord = {
+      id: "seller-1",
+      email: "seller@test.com",
+      passwordHash,
+      displayName: "가게",
+      companyCode: "ABC123",
+    };
+    const alerter = fakeAlerter();
+    const { app } = buildApp({ NODE_ENV: "test" } as NodeJS.ProcessEnv, {
+      auth: fakeAuthDeps([seller], { alerter }),
+    });
+    const token = await requestReset(app, alerter);
+    // Simulate expiry without depending on real wall-clock time.
+    seller.passwordResetExpiresAt = new Date(Date.now() - 1000);
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/auth/forgot-password/reset",
+      payload: { token, password: "new-password1" },
+    });
+    expect(res.statusCode).toBe(401);
     await app.close();
   });
 });

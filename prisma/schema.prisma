@@ -52,6 +52,12 @@ model Seller {
   email                   String                  @unique
   /// bcrypt hash (src/auth/password.ts) — plaintext password never stored.
   passwordHash            String
+  /// ARK-86: SHA-256 hash of the active password-reset token (never the raw
+  /// token — src/auth/resetToken.ts). Null when no reset is pending.
+  passwordResetTokenHash  String?
+  /// ARK-86: expiry for passwordResetTokenHash; both cleared together on
+  /// consumption or replacement by a newer request.
+  passwordResetExpiresAt  DateTime?
   createdAt               DateTime                @default(now())
   connections             MarketplaceConnection[]
   orders                  Order[]

@@ -35,6 +35,7 @@ ${DESIGN_TOKENS_CSS}
     <input id="password" type="password" placeholder="********" />
     <button id="submit" type="button">로그인</button>
     <div id="msg"></div>
+    <p class="muted"><a href="/account-recovery">회사코드 / 비밀번호를 잊으셨나요?</a></p>
     <p class="muted">아직 워크스페이스가 없으신가요? <a href="/signup">워크스페이스 만들기</a></p>
   </div>
 

@@ -9,6 +9,12 @@ export interface SellerAuthRecord {
   displayName: string;
   /** ARK-72: 회사코드 — required alongside email/password at login. */
   companyCode: string;
+  /** ARK-86: SHA-256 hash of the active password-reset token, or null/undefined
+   * when no reset is pending. Never the raw token — see resetToken.ts. */
+  passwordResetTokenHash?: string | null;
+  /** ARK-86: expiry for `passwordResetTokenHash`. Both are cleared together
+   * once the reset is consumed (or superseded by a new request). */
+  passwordResetExpiresAt?: Date | null;
 }
 
 // ARK-72: excludes 0/O/1/I so a seller reading the code off-screen never
@@ -42,6 +48,8 @@ function toRecord(row: {
   passwordHash: string;
   displayName: string;
   companyCode: string;
+  passwordResetTokenHash?: string | null;
+  passwordResetExpiresAt?: Date | null;
 }): SellerAuthRecord {
   return {
     id: row.id,
@@ -49,6 +57,8 @@ function toRecord(row: {
     passwordHash: row.passwordHash,
     displayName: row.displayName,
     companyCode: row.companyCode,
+    passwordResetTokenHash: row.passwordResetTokenHash,
+    passwordResetExpiresAt: row.passwordResetExpiresAt,
   };
 }
 
@@ -92,5 +102,35 @@ export class AuthStore {
   async findSellerById(id: string): Promise<SellerAuthRecord | null> {
     const row = await this.prisma.seller.findUnique({ where: { id } });
     return row ? toRecord(row) : null;
+  }
+
+  /** ARK-86: issues (or replaces) the seller's password-reset token. Storing
+   * only the hash means a DB read alone never yields a usable token. */
+  async setPasswordResetToken(
+    sellerId: string,
+    tokenHash: string,
+    expiresAt: Date,
+  ): Promise<void> {
+    await this.prisma.seller.update({
+      where: { id: sellerId },
+      data: { passwordResetTokenHash: tokenHash, passwordResetExpiresAt: expiresAt },
+    });
+  }
+
+  /** ARK-86: looks up the seller currently holding this reset-token hash.
+   * Caller is responsible for checking `passwordResetExpiresAt` — kept here
+   * as a plain lookup, matching `findSellerByEmail`'s shape. */
+  async findSellerByResetTokenHash(tokenHash: string): Promise<SellerAuthRecord | null> {
+    const row = await this.prisma.seller.findFirst({ where: { passwordResetTokenHash: tokenHash } });
+    return row ? toRecord(row) : null;
+  }
+
+  /** ARK-86: consumes the pending reset — sets the new password hash and
+   * clears the token so it can't be replayed. */
+  async resetPassword(sellerId: string, passwordHash: string): Promise<void> {
+    await this.prisma.seller.update({
+      where: { id: sellerId },
+      data: { passwordHash, passwordResetTokenHash: null, passwordResetExpiresAt: null },
+    });
   }
 }

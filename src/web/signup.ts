@@ -59,6 +59,9 @@ ${DESIGN_TOKENS_CSS}
       <div class="muted" style="margin-top:0;">회사코드</div>
       <div class="code" id="companyCodeOut"></div>
     </div>
+    <p class="muted" style="margin-top:0;text-align:left;">
+      회사코드를 잊어버리면 로그인 화면에서 이메일로 다시 찾을 수 있습니다.
+    </p>
     <button id="proceed" type="button">시작하기</button>
   </div>
 

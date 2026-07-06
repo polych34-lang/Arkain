@@ -18,6 +18,10 @@ import { renderConnectionsDashboard } from "./web/connectionsDashboard.js";
 import { renderGsShopImport } from "./web/gsshopImport.js";
 import { renderSignup } from "./web/signup.js";
 import { renderLogin } from "./web/login.js";
+import { renderAccountRecovery } from "./web/accountRecovery.js";
+import { renderFindCompanyCode } from "./web/findCompanyCode.js";
+import { renderForgotPassword } from "./web/forgotPassword.js";
+import { renderResetPassword } from "./web/resetPassword.js";
 import { renderProductsDashboard } from "./web/productsDashboard.js";
 import { renderSalesCalendarShell } from "./web/salesCalendar.js";
 import { connectNaverSeller } from "./connect/naverSellerConnect.js";
@@ -30,6 +34,13 @@ import {
   sessionSetCookieHeader,
 } from "./auth/session.js";
 import type { SellerAuthRecord } from "./auth/authStore.js";
+import { createRateLimiter } from "./auth/rateLimiter.js";
+import {
+  generatePasswordResetToken,
+  hashPasswordResetToken,
+  PASSWORD_RESET_TOKEN_TTL_MS,
+} from "./auth/resetToken.js";
+import type { AlertNotifier } from "./alerting/notifier.js";
 import type { ProductListItem } from "./domain/repository.js";
 import { MissingPriceError } from "./domain/b2b/pricing.js";
 import { InvalidTransitionError } from "./domain/b2b/purchaseOrderStateMachine.js";
@@ -111,10 +122,23 @@ export interface AuthDeps {
     findSellerByEmail(email: string): Promise<SellerAuthRecord | null>;
     /** ARK-72: powers `/api/auth/me`'s `displayName` (logged-in topbar). */
     findSellerById(id: string): Promise<SellerAuthRecord | null>;
+    /** ARK-86: issues (or replaces) a seller's password-reset token. */
+    setPasswordResetToken(sellerId: string, tokenHash: string, expiresAt: Date): Promise<void>;
+    /** ARK-86: looks up the seller currently holding this token hash — caller
+     * checks `passwordResetExpiresAt` itself. */
+    findSellerByResetTokenHash(tokenHash: string): Promise<SellerAuthRecord | null>;
+    /** ARK-86: consumes the pending reset (sets passwordHash, clears the token). */
+    resetPassword(sellerId: string, passwordHash: string): Promise<void>;
   };
   sessionSecret: string;
   /** `Secure` cookie attribute — true outside local dev (config.NODE_ENV). */
   cookieSecure: boolean;
+  /** ARK-86: notifies ops (Slack webhook, see src/alerting/notifier.ts) when a
+   * password-reset is requested — the interim delivery path until there's
+   * real email infra to hand the reset token to the seller directly.
+   * Optional so pre-existing tests that build `AuthDeps` without an alerter
+   * keep compiling (see fakeAuthDeps in test/auth.test.ts). */
+  alerter?: AlertNotifier;
 }
 
 /** ARK-57 상품등록 surface — `PrismaDomainStore` satisfies this structurally
@@ -209,7 +233,11 @@ export function buildApp(
   const config = loadEnv(env);
   const logger = createLogger(config);
 
-  const app = Fastify({ loggerInstance: logger });
+  // ARK-86: the account-recovery rate limiters below key partly on `req.ip`.
+  // Fly.io always proxies inbound traffic, so without `trustProxy` every
+  // request would report the proxy's own address and the limiter would
+  // throttle all sellers as one shared bucket instead of per-caller.
+  const app = Fastify({ loggerInstance: logger, trustProxy: true });
 
   // 20MB cap: comfortably above a multi-thousand-row 주문리스트 엑셀, small
   // enough to not be an easy DoS vector on a pre-auth upload endpoint.
@@ -217,6 +245,13 @@ export function buildApp(
     attachFieldsToBody: true,
     limits: { fileSize: 20 * 1024 * 1024 },
   });
+
+  // ARK-86: 계정 찾기(회사코드/비밀번호) 엔드포인트 전용 rate limiter — 전수
+  // 조회/무차별 대입 방지. 앱 인스턴스당 in-process 상태(rateLimiter.ts 참고).
+  const RECOVERY_WINDOW_MS = 15 * 60 * 1000;
+  const findCompanyCodeLimiter = createRateLimiter({ max: 5, windowMs: RECOVERY_WINDOW_MS });
+  const forgotPasswordRequestLimiter = createRateLimiter({ max: 5, windowMs: RECOVERY_WINDOW_MS });
+  const forgotPasswordResetLimiter = createRateLimiter({ max: 20, windowMs: RECOVERY_WINDOW_MS });
 
   app.get("/health", async () => ({
     status: "ok",
@@ -238,6 +273,7 @@ export function buildApp(
     docs: "/health",
     signup: "/signup",
     login: "/login",
+    accountRecovery: "/account-recovery",
     products: "/products",
     dashboard: "/orders",
     salesCalendar: "/sales/calendar",
@@ -348,6 +384,27 @@ export function buildApp(
     return renderLogin();
   });
 
+  // --- ARK-86: 회사코드 찾기 / 비밀번호 재설정 ------------------------------
+  app.get("/account-recovery", async (_req, reply) => {
+    reply.type("text/html; charset=utf-8");
+    return renderAccountRecovery();
+  });
+
+  app.get("/account-recovery/company-code", async (_req, reply) => {
+    reply.type("text/html; charset=utf-8");
+    return renderFindCompanyCode();
+  });
+
+  app.get("/account-recovery/password", async (_req, reply) => {
+    reply.type("text/html; charset=utf-8");
+    return renderForgotPassword();
+  });
+
+  app.get("/account-recovery/reset", async (_req, reply) => {
+    reply.type("text/html; charset=utf-8");
+    return renderResetPassword();
+  });
+
   app.post("/api/auth/signup", async (req, reply) => {
     if (!deps.auth) {
       reply.code(503);
@@ -434,6 +491,108 @@ export function buildApp(
       displayName: seller.displayName,
       companyCode: seller.companyCode,
     };
+  });
+
+  // ARK-86: 회사코드 찾기 — 이메일 소유 확인 없이 조회 허용(이슈의 명시적
+  // 결정: 회사코드만으로는 로그인할 수 없어 비밀번호 재설정보다 위험도가
+  // 낮다). rate limit만이 유일한 방어선이라 IP와 이메일 양쪽에 건다.
+  app.post("/api/auth/find-company-code", async (req, reply) => {
+    if (!deps.auth) {
+      reply.code(503);
+      return { error: "아직 설정되지 않았습니다 (DATABASE_URL/SESSION_SECRET 미설정)" };
+    }
+    const body = (req.body ?? {}) as { email?: string };
+    const email = body.email?.trim().toLowerCase();
+    if (!email) {
+      reply.code(400);
+      return { error: "email is required" };
+    }
+    if (!findCompanyCodeLimiter.consume(`ip:${req.ip}`) || !findCompanyCodeLimiter.consume(`email:${email}`)) {
+      reply.code(429);
+      return { error: "잠시 후 다시 시도해주세요" };
+    }
+    const seller = await deps.auth.store.findSellerByEmail(email);
+    if (!seller) {
+      reply.code(404);
+      return { error: "등록되지 않은 이메일입니다" };
+    }
+    return { companyCode: seller.companyCode };
+  });
+
+  // ARK-86: 비밀번호 재설정 요청 — 이메일 발송 인프라가 없어 재설정 코드를
+  // 응답에 바로 담지 않는다(회사코드 찾기와 조합하면 이메일 주소만으로 계정을
+  // 탈취할 수 있는 구멍이 생기기 때문 — forgotPassword.ts의 doc 참고). 대신
+  // 유효한 요청이면 코드를 해시로 저장하고 운영 알림만 보낸다. 응답 메시지는
+  // 매칭 성공/실패와 무관하게 항상 동일해서 이 엔드포인트 자체는 계정 존재
+  // 여부를 노출하지 않는다.
+  app.post("/api/auth/forgot-password/request", async (req, reply) => {
+    if (!deps.auth) {
+      reply.code(503);
+      return { error: "아직 설정되지 않았습니다 (DATABASE_URL/SESSION_SECRET 미설정)" };
+    }
+    const body = (req.body ?? {}) as { companyCode?: string; email?: string };
+    const companyCode = body.companyCode?.trim().toUpperCase();
+    const email = body.email?.trim().toLowerCase();
+    if (!companyCode || !email) {
+      reply.code(400);
+      return { error: "companyCode and email are required" };
+    }
+    if (
+      !forgotPasswordRequestLimiter.consume(`ip:${req.ip}`) ||
+      !forgotPasswordRequestLimiter.consume(`pair:${companyCode}:${email}`)
+    ) {
+      reply.code(429);
+      return { error: "잠시 후 다시 시도해주세요" };
+    }
+    const seller = await deps.auth.store.findSellerByEmail(email);
+    if (seller && seller.companyCode === companyCode) {
+      const token = generatePasswordResetToken();
+      const expiresAt = new Date(Date.now() + PASSWORD_RESET_TOKEN_TTL_MS);
+      await deps.auth.store.setPasswordResetToken(seller.id, hashPasswordResetToken(token), expiresAt);
+      void deps.auth.alerter?.send({
+        category: "password_reset",
+        message: `비밀번호 재설정 요청 — ${email} (회사코드 ${companyCode}). 본인 확인 후 재설정 코드를 직접 전달하세요.`,
+        context: { sellerId: seller.id, email, companyCode, resetToken: token },
+      });
+    }
+    // Always the same response — this endpoint must not reveal whether the
+    // companyCode/email pair matched a seller.
+    return { ok: true, message: "요청이 접수되었습니다" };
+  });
+
+  // ARK-86: 비밀번호 재설정 코드 소비. 담당자가 forgot-password/request 알림을
+  // 보고 직접 전달한 코드를 셀러가 여기 입력한다.
+  app.post("/api/auth/forgot-password/reset", async (req, reply) => {
+    if (!deps.auth) {
+      reply.code(503);
+      return { error: "아직 설정되지 않았습니다 (DATABASE_URL/SESSION_SECRET 미설정)" };
+    }
+    const body = (req.body ?? {}) as { token?: string; password?: string };
+    const token = body.token?.trim();
+    if (!token || !body.password) {
+      reply.code(400);
+      return { error: "token and password are required" };
+    }
+    if (body.password.length < 8) {
+      reply.code(400);
+      return { error: "비밀번호는 8자 이상이어야 합니다" };
+    }
+    if (!forgotPasswordResetLimiter.consume(`ip:${req.ip}`)) {
+      reply.code(429);
+      return { error: "잠시 후 다시 시도해주세요" };
+    }
+    const seller = await deps.auth.store.findSellerByResetTokenHash(hashPasswordResetToken(token));
+    if (
+      !seller ||
+      !seller.passwordResetExpiresAt ||
+      seller.passwordResetExpiresAt.getTime() < Date.now()
+    ) {
+      reply.code(401);
+      return { error: "재설정 코드가 올바르지 않거나 만료되었습니다" };
+    }
+    const passwordHash = await hashPassword(body.password);
+    await deps.auth.store.resetPassword(seller.id, passwordHash);
+    return { ok: true };
   });
 
   // --- ARK-57: 상품등록 (manual product entry, no marketplace sync yet) -----

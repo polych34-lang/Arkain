@@ -153,6 +153,8 @@ function buildSyncDeps(
             store: new AuthStore(prisma),
             sessionSecret: config.SESSION_SECRET,
             cookieSecure: config.NODE_ENV === "production",
+            // ARK-86: 비밀번호 재설정 요청 알림 — 기존 ARK-28 ops 알림 채널 재사용.
+            alerter,
           }
         : undefined,
       products: config.SESSION_SECRET ? { store } : undefined,

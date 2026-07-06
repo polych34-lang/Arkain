@@ -10,11 +10,19 @@ function fakeAuthDeps(): AuthDeps {
     cookieSecure: false,
     store: {
       async createSeller(input) {
-        return { id: "seller-1", ...input };
+        return { id: "seller-1", companyCode: "CODE1", ...input };
       },
       async findSellerByEmail() {
         return null;
       },
+      async findSellerById() {
+        return null;
+      },
+      async setPasswordResetToken() {},
+      async findSellerByResetTokenHash() {
+        return null;
+      },
+      async resetPassword() {},
     },
   };
 }

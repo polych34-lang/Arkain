@@ -13,7 +13,16 @@ import type { Logger } from "pino";
  * (dev/test default) this is log-only — never a network call.
  */
 
-export type AlertCategory = "sync_failure" | "rate_limit" | "settlement_mismatch";
+export type AlertCategory =
+  | "sync_failure"
+  | "rate_limit"
+  | "settlement_mismatch"
+  // ARK-86: fired when a seller requests a password reset. There's no email
+  // infra to deliver the reset token to the seller directly (see
+  // src/app.ts's forgot-password/request route), so this is the interim
+  // notification path — the founder relays the token out-of-band after
+  // confirming the request is legitimate.
+  | "password_reset";
 
 export interface AlertEvent {
   category: AlertCategory;
@@ -40,6 +49,7 @@ const LOG_LEVEL_BY_CATEGORY: Record<AlertCategory, "warn" | "error"> = {
   sync_failure: "error",
   rate_limit: "warn",
   settlement_mismatch: "error",
+  password_reset: "warn",
 };
 
 export function createAlertNotifier(
